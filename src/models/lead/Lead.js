@@ -1,0 +1,78 @@
+const mongoose = require("mongoose");
+const {
+  LEAD_STATUSES,
+  PAYMENT_STATUSES,
+  LEAD_TYPES,
+} = require("../../constants/services");
+
+const noteSchema = new mongoose.Schema(
+  {
+    text: { type: String, required: true, trim: true },
+    author: { type: String, default: "Website" },
+  },
+  { timestamps: true }
+);
+
+const leadSchema = new mongoose.Schema(
+  {
+    slNo: { type: Number },
+    orderId: { type: String, index: true },
+
+    // display date/time captured at submission (admin tables read these)
+    date: { type: String },
+    time: { type: String },
+
+    // contact
+    name: { type: String, required: true, trim: true },
+    mobileNumber: { type: String, required: true, trim: true },
+    email: { type: String, trim: true, lowercase: true, default: "" },
+
+    // location
+    address: { type: String, default: "" },
+    district: { type: String, default: "" },
+    state: { type: String, default: "" },
+    pinCode: { type: String, default: "" },
+
+    // service + commercials
+    service: { type: String, required: true, trim: true },
+    amount: { type: Number, default: 0 },
+    paymentStatus: {
+      type: String,
+      enum: PAYMENT_STATUSES,
+      default: "unpaid",
+    },
+
+    // CRM workflow
+    status: { type: String, enum: LEAD_STATUSES, default: "new" },
+    assignedTo: { type: String, default: "" },
+    source: { type: String, default: "Website" },
+    leadType: { type: String, enum: LEAD_TYPES, default: "website" },
+    followUpDate: { type: String },
+    notes: { type: [noteSchema], default: [] },
+
+    // common applicant fields shared across several services
+    applyingFor: { type: String },
+    gender: { type: String },
+    dateOfBirth: { type: String },
+    placeOfBirth: { type: String },
+    educationQualification: { type: String },
+    employmentType: { type: String },
+    nearbyPoliceStation: { type: String },
+
+    // everything else the per-service form collects
+    formData: { type: mongoose.Schema.Types.Mixed, default: {} },
+  },
+  {
+    timestamps: true,
+    toJSON: {
+      virtuals: true,
+      versionKey: false,
+      transform: (_doc, ret) => {
+        delete ret._id;
+        return ret;
+      },
+    },
+  }
+);
+
+module.exports = mongoose.model("Lead", leadSchema);

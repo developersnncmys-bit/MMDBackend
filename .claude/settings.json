@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node wire-visa-forms.cjs)",
+      "Bash(node server.js)",
+      "Bash(npm run *)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\admin\\Desktop\\Dhanalakshmi\\MMD-Newwebsite\\makemydocuments",
+      "c:\\Users\\admin\\Desktop\\Dhanalakshmi\\MMD-Newadminpanel\\Leads-dashboard-MMD\\lib",
+      "c:\\Users\\admin\\Desktop\\Dhanalakshmi\\MMD-Newadminpanel\\Leads-dashboard-MMD\\context",
+      "c:\\Users\\admin\\Desktop\\Dhanalakshmi\\MMD-Newadminpanel\\Leads-dashboard-MMD\\app\\(dashboard)\\leads\\add"
+    ]
+  }
+}
