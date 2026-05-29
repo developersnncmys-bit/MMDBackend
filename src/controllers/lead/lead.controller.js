@@ -3,6 +3,35 @@ const Lead = require("../../models/lead/Lead");
 const generateOrderId = () =>
   "MMD" + Date.now() + Math.floor(Math.random() * 9000 + 1000);
 
+// The three follow-up buckets are derived from followUpDate, not stored as a
+// fixed value: a lead scheduled for the future sits in "followup", rolls into
+// "today" on the day, and into "overdue" once the date passes. We keep the
+// stored status as the admin set it and recompute the display bucket on read.
+const SCHEDULED_STATUSES = ["followup", "today", "overdue"];
+
+const localToday = () => {
+  const n = new Date();
+  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(
+    n.getDate()
+  ).padStart(2, "0")}`;
+};
+
+const effectiveStatus = (status, followUpDate) => {
+  if (!followUpDate || !SCHEDULED_STATUSES.includes(status)) return status;
+  const fu = String(followUpDate).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fu)) return status;
+  const today = localToday();
+  if (fu < today) return "overdue";
+  if (fu === today) return "today";
+  return "followup";
+};
+
+const serializeLead = (doc) => {
+  const o = doc && typeof doc.toJSON === "function" ? doc.toJSON() : doc;
+  if (o) o.status = effectiveStatus(o.status, o.followUpDate);
+  return o;
+};
+
 // website submits leads, admin can also add them manually
 exports.createLead = async (req, res) => {
   try {
@@ -70,7 +99,7 @@ exports.createLead = async (req, res) => {
 
     return res
       .status(201)
-      .json({ success: true, message: "Lead created", data: lead });
+      .json({ success: true, message: "Lead created", data: serializeLead(lead) });
   } catch (err) {
     console.error("createLead error:", err);
     return res.status(500).json({ success: false, message: "Server error" });
@@ -90,7 +119,8 @@ exports.listLeads = async (req, res) => {
     }
 
     const data = await Lead.find(query).sort({ createdAt: -1 });
-    return res.json({ success: true, count: data.length, data });
+    const out = data.map(serializeLead);
+    return res.json({ success: true, count: out.length, data: out });
   } catch (err) {
     console.error("listLeads error:", err);
     return res.status(500).json({ success: false, message: "Server error" });
@@ -105,7 +135,7 @@ exports.getLeadById = async (req, res) => {
         .status(404)
         .json({ success: false, message: "Lead not found" });
     }
-    return res.json({ success: true, data: lead });
+    return res.json({ success: true, data: serializeLead(lead) });
   } catch (err) {
     console.error("getLeadById error:", err);
     return res.status(500).json({ success: false, message: "Server error" });
@@ -159,7 +189,7 @@ exports.updateLead = async (req, res) => {
         .status(404)
         .json({ success: false, message: "Lead not found" });
     }
-    return res.json({ success: true, message: "Lead updated", data: lead });
+    return res.json({ success: true, message: "Lead updated", data: serializeLead(lead) });
   } catch (err) {
     console.error("updateLead error:", err);
     return res.status(500).json({ success: false, message: "Server error" });
@@ -207,12 +237,11 @@ exports.deleteLead = async (req, res) => {
   }
 };
 
-// dashboard counts
+// dashboard counts — uses the derived follow-up buckets so the totals match
+// what the admin sees in each list
 exports.getStats = async (req, res) => {
   try {
-    const grouped = await Lead.aggregate([
-      { $group: { _id: "$status", count: { $sum: 1 } } },
-    ]);
+    const leads = await Lead.find({}, "status followUpDate").lean();
 
     const stats = {
       new: 0,
@@ -224,9 +253,10 @@ exports.getStats = async (req, res) => {
       dead: 0,
       total: 0,
     };
-    for (const g of grouped) {
-      if (g._id in stats) stats[g._id] = g.count;
-      stats.total += g.count;
+    for (const l of leads) {
+      const status = effectiveStatus(l.status, l.followUpDate);
+      if (status in stats) stats[status] += 1;
+      stats.total += 1;
     }
 
     return res.json({ success: true, data: stats });
