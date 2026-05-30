@@ -3,6 +3,18 @@ const Lead = require("../../models/lead/Lead");
 const generateOrderId = () =>
   "MMD" + Date.now() + Math.floor(Math.random() * 9000 + 1000);
 
+// All date/time strings are stored in IST so they match what the user actually
+// entered the form at — Render servers run UTC, which is ~5h30m behind India.
+const istDate = () =>
+  new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+const istTime = () =>
+  new Date().toLocaleTimeString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+
 // The three follow-up buckets are derived from followUpDate, not stored as a
 // fixed value: a lead scheduled for the future sits in "followup", rolls into
 // "today" on the day, and into "overdue" once the date passes. We keep the
@@ -57,20 +69,13 @@ exports.createLead = async (req, res) => {
         .json({ success: false, message: "Service is required" });
     }
 
-    const now = new Date();
     const slNo = (await Lead.countDocuments()) + 1;
 
     const lead = await Lead.create({
       slNo,
       orderId: b.orderId || generateOrderId(),
-      date: b.date || now.toISOString().slice(0, 10),
-      time:
-        b.time ||
-        now.toLocaleTimeString("en-IN", {
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: true,
-        }),
+      date: b.date || istDate(),
+      time: b.time || istTime(),
       name,
       mobileNumber,
       email: b.email || "",
