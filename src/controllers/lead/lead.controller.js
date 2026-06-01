@@ -220,7 +220,7 @@ exports.addNote = async (req, res) => {
         .status(404)
         .json({ success: false, message: "Lead not found" });
     }
-    return res.json({ success: true, message: "Note added", data: lead });
+    return res.json({ success: true, message: "Note added", data: serializeLead(lead) });
   } catch (err) {
     console.error("addNote error:", err);
     return res.status(500).json({ success: false, message: "Server error" });
