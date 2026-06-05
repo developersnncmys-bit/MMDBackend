@@ -138,17 +138,31 @@ exports.callback = async (req, res) => {
       { paymentStatus },
       { new: true }
     );
+    console.log("PG callback lead lookup:", {
+      orderid,
+      paid,
+      leadFound: !!lead,
+      leadEmail: lead?.email,
+      leadMobile: lead?.mobileNumber,
+      leadService: lead?.service,
+    });
 
     // Fire-and-forget email + SMS on success.
     if (paid && lead) {
+      console.log("PG sending email + sms for paid lead", lead.orderId);
       sendPaymentEmail({ to: lead.email, name: lead.name, service: lead.service })
-        .catch((e) => console.error("email:", e));
+        .then(() => console.log("PG email send finished for", lead.email))
+        .catch((e) => console.error("PG email error:", e.message));
       sendPaymentSms({
         mobile: lead.mobileNumber,
         name: lead.name,
         service: lead.service,
         link: "https://wa.me/919980097315",
-      }).catch((e) => console.error("sms:", e));
+      })
+        .then(() => console.log("PG sms send finished for", lead.mobileNumber))
+        .catch((e) => console.error("PG sms error:", e.message));
+    } else if (paid && !lead) {
+      console.error("PG callback: paid but lead NOT FOUND for orderId", orderid);
     }
 
     const websiteBase = process.env.WEBSITE_URL || "http://localhost:3000";

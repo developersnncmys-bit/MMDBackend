@@ -50,7 +50,8 @@ const bodyFor = (service = "") => {
 
 exports.sendPaymentEmail = async ({ to, name, service }) => {
   const t = getTransporter();
-  if (!t || !to) return;
+  if (!t) { console.warn("Email skipped: transporter not configured"); return; }
+  if (!to) { console.warn("Email skipped: no recipient address"); return; }
   const { message, link } = bodyFor(service);
   const html = `
     <h2>Payment Confirmation</h2>
@@ -62,13 +63,14 @@ exports.sendPaymentEmail = async ({ to, name, service }) => {
     <p>Best Regards,<br>MakeMyDocuments Team</p>
   `;
   try {
-    await t.sendMail({
+    const info = await t.sendMail({
       from: `"Support Team" <${process.env.SMTP_USER}>`,
       to,
       subject: "Payment Successful — MakeMyDocuments",
       html,
     });
+    console.log("Email SENT:", { to, messageId: info.messageId, response: info.response });
   } catch (err) {
-    console.error("sendPaymentEmail error:", err.message);
+    console.error("Email SEND FAILED:", { to, error: err.message, code: err.code });
   }
 };

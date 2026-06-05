@@ -49,9 +49,11 @@ exports.sendPaymentSms = async ({ mobile, name, service, link }) => {
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok || (data && data.type === "error")) {
-      console.error("sendPaymentSms failed:", data);
+      console.error("SMS SEND FAILED:", { status: resp.status, body: data, payload });
+    } else {
+      console.log("SMS SENT:", { mobiles, template_id, response: data });
     }
   } catch (err) {
-    console.error("sendPaymentSms error:", err.message);
+    console.error("SMS SEND ERROR:", err.message);
   }
 };
