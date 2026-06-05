@@ -60,6 +60,10 @@ exports.initiate = async (req, res) => {
       paramList,
       cfg.MERCHANT_KEY
     );
+    console.log("PG initiate ok:", {
+      ORDER_ID, MID: cfg.MID, TXN_AMOUNT: paramList.TXN_AMOUNT,
+      keyLen: cfg.MERCHANT_KEY.length,
+    });
     return res.json({
       status: "success",
       ORDER_ID,
@@ -87,6 +91,15 @@ const failRedirect = (res, service, reason) => {
 // the failure page than to show raw JSON.
 exports.callback = async (req, res) => {
   const service = normalizeService(req.query.service);
+  // Dump everything Paytm sent us — without this we're flying blind when the
+  // checksum/body check fails. Visible in Render logs.
+  console.log("PG callback hit:", {
+    method: req.method,
+    contentType: req.headers["content-type"],
+    query: req.query,
+    body: req.body,
+    bodyKeys: Object.keys(req.body || {}),
+  });
   try {
     const cfg = paytm();
     if (!cfg.MERCHANT_KEY) {
