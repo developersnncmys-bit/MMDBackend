@@ -72,23 +72,39 @@ exports.initiate = async (req, res) => {
   }
 };
 
-// POST /api/PG/paytm/callback (called by Paytm with form-urlencoded body)
-exports.callback = async (req, res) => {
-  try {
-    if (!req.body || Object.keys(req.body).length === 0) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Empty callback body" });
-    }
-    const { CHECKSUMHASH, ...paramList } = req.body;
-    const orderid = paramList.ORDERID;
-    const service = normalizeService(req.query.service);
-    const cfg = paytm();
+// Lands the user on the website's failure page rather than leaving them on a
+// JSON error response when something goes wrong inside the callback.
+const failRedirect = (res, service, reason) => {
+  console.error("PG callback bailing out:", reason);
+  const base = process.env.WEBSITE_URL || "http://localhost:3000";
+  const slug = service || "general";
+  return res.redirect(`${base}/failure/${slug}`);
+};
 
-    if (!CHECKSUMHASH || !cfg.MERCHANT_KEY) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Missing checksum or config" });
+// POST /api/PG/paytm/callback — Paytm POSTs the result as form-urlencoded.
+// We ALSO expose this as GET, because some Paytm flows (and any user who
+// refreshes / bookmarks the URL) come back via GET — better to send them to
+// the failure page than to show raw JSON.
+exports.callback = async (req, res) => {
+  const service = normalizeService(req.query.service);
+  try {
+    const cfg = paytm();
+    if (!cfg.MERCHANT_KEY) {
+      // Almost always: PAYTM_MERCHANT_KEY isn't set in the deployed env.
+      return failRedirect(res, service, "PAYTM_MERCHANT_KEY env var is not set");
+    }
+
+    // GET (or empty POST): can't verify a checksum that isn't there. Treat
+    // as a non-success outcome and redirect.
+    if (req.method !== "POST" || !req.body || Object.keys(req.body).length === 0) {
+      return failRedirect(res, service, `${req.method} with no body`);
+    }
+
+    const { CHECKSUMHASH, ...paramList } = req.body;
+    const orderid = paramList.ORDERID || req.query.orderid;
+
+    if (!CHECKSUMHASH) {
+      return failRedirect(res, service, "callback body has no CHECKSUMHASH");
     }
 
     const isValid = await PaytmChecksum.verifySignature(
@@ -97,10 +113,7 @@ exports.callback = async (req, res) => {
       CHECKSUMHASH
     );
     if (!isValid) {
-      console.error("Paytm callback: checksum verify failed");
-      return res
-        .status(400)
-        .json({ success: false, message: "Checksum verification failed" });
+      return failRedirect(res, service, "checksum verify failed");
     }
 
     const paid = paramList.STATUS === "TXN_SUCCESS";
@@ -131,7 +144,6 @@ exports.callback = async (req, res) => {
       : `${websiteBase}/failure/${service || "general"}`;
     return res.redirect(target);
   } catch (err) {
-    console.error("PG callback error:", err);
-    return res.status(500).json({ success: false, message: "Server error" });
+    return failRedirect(res, service, `exception: ${err.message}`);
   }
 };
