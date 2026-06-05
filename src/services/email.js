@@ -10,15 +10,24 @@ const getTransporter = () => {
     console.warn("Email: SMTP not configured");
     return null;
   }
+  const port = Number(process.env.SMTP_PORT || 465);
   transporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT || 465),
-    secure: Number(process.env.SMTP_PORT || 465) === 465,
+    port,
+    secure: port === 465, // SSL for 465, STARTTLS for 587
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
     },
+    // Without these, a blocked outbound SMTP just hangs forever on Render and
+    // no error ever surfaces. 15s is plenty for a healthy Zoho connection.
+    connectionTimeout: 15000,
+    greetingTimeout: 10000,
+    socketTimeout: 20000,
     tls: { rejectUnauthorized: false },
+  });
+  console.log("Email transporter ready:", {
+    host: process.env.SMTP_HOST, port, user: process.env.SMTP_USER,
   });
   return transporter;
 };
