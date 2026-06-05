@@ -1,5 +1,11 @@
-// Post-payment confirmation email via Zoho SMTP. Fire-and-forget from the
-// Paytm callback — failures here must not block the redirect.
+// Post-payment confirmation email. Fire-and-forget from the Paytm callback —
+// failures here must not block the redirect.
+//
+// Provider selection:
+//   - If RESEND_API_KEY is set → send via Resend's HTTPS API (works on Render
+//     free tier, since Render only blocks outbound SMTP ports, not HTTPS).
+//   - Else fall back to Zoho SMTP via nodemailer (requires a host that allows
+//     outbound port 465/587 — Render free tier does NOT).
 
 const nodemailer = require("nodemailer");
 
@@ -57,9 +63,49 @@ const bodyFor = (service = "") => {
   };
 };
 
-exports.sendPaymentEmail = async ({ to, name, service }) => {
+// EMAIL_FROM is what shows up in the recipient's "From" header. While testing
+// without a verified domain on Resend, use "onboarding@resend.dev". Once the
+// makemydocuments.com domain is verified in Resend, switch to
+// "support@makemydocuments.com".
+const fromAddress = () =>
+  process.env.EMAIL_FROM || process.env.SMTP_USER || "onboarding@resend.dev";
+
+const sendViaResend = async ({ to, subject, html }) => {
+  const resp = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from: fromAddress(),
+      to: [to],
+      subject,
+      html,
+    }),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    throw new Error(
+      `Resend ${resp.status}: ${data.message || JSON.stringify(data)}`
+    );
+  }
+  return { messageId: data.id, response: "OK (Resend)" };
+};
+
+const sendViaSmtp = async ({ to, subject, html }) => {
   const t = getTransporter();
-  if (!t) { console.warn("Email skipped: transporter not configured"); return; }
+  if (!t) throw new Error("SMTP not configured");
+  const info = await t.sendMail({
+    from: `"Support Team" <${fromAddress()}>`,
+    to,
+    subject,
+    html,
+  });
+  return { messageId: info.messageId, response: info.response };
+};
+
+exports.sendPaymentEmail = async ({ to, name, service }) => {
   if (!to) { console.warn("Email skipped: no recipient address"); return; }
   const { message, link } = bodyFor(service);
   const html = `
@@ -71,15 +117,19 @@ exports.sendPaymentEmail = async ({ to, name, service }) => {
     <br>
     <p>Best Regards,<br>MakeMyDocuments Team</p>
   `;
+  const subject = "Payment Successful — MakeMyDocuments";
+  const useResend = !!process.env.RESEND_API_KEY;
   try {
-    const info = await t.sendMail({
-      from: `"Support Team" <${process.env.SMTP_USER}>`,
-      to,
-      subject: "Payment Successful — MakeMyDocuments",
-      html,
+    const result = useResend
+      ? await sendViaResend({ to, subject, html })
+      : await sendViaSmtp({ to, subject, html });
+    console.log("Email SENT:", {
+      to, via: useResend ? "Resend" : "SMTP", ...result,
     });
-    console.log("Email SENT:", { to, messageId: info.messageId, response: info.response });
   } catch (err) {
-    console.error("Email SEND FAILED:", { to, error: err.message, code: err.code });
+    console.error("Email SEND FAILED:", {
+      to, via: useResend ? "Resend" : "SMTP",
+      error: err.message, code: err.code,
+    });
   }
 };
