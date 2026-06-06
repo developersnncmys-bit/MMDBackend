@@ -2,7 +2,7 @@
 // gets back a signed paramList, then auto-POSTs to PAYTM_TRANSACTION_URL.
 // Paytm calls /callback with the result; we verify the checksum, update the
 // lead's payment status, fire-and-forget email + SMS, and redirect to
-// /requestsuccess/<service> (or /failure/<service>).
+// /request_success/<service> (or /failure/<service>).
 
 const PaytmChecksum = require("paytmchecksum");
 const Lead = require("../../models/lead/Lead");
@@ -20,7 +20,7 @@ const paytm = () => ({
 });
 
 // URL-safe slug. "Police Clearance Certificate (PCC)" → "policeclearancecertificatepcc".
-// The /requestsuccess/[service] page on the website declares these exact slugs
+// The /request_success/[service] page on the website declares these exact slugs
 // in generateStaticParams, so normalization must agree on both sides.
 const normalizeService = (s = "") =>
   String(s).toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -52,7 +52,7 @@ exports.initiate = async (req, res) => {
       TXN_AMOUNT: String(TXN_AMOUNT),
       WEBSITE: cfg.WEBSITE,
       // Service is round-tripped on the callback so the redirect knows which
-      // /requestsuccess/<service> URL to land on.
+      // /request_success/<service> URL to land on.
       CALLBACK_URL: `${cfg.CALLBACK_URL}?orderid=${encodeURIComponent(ORDER_ID)}&service=${encodeURIComponent(SERVICE)}`,
     };
 
@@ -167,7 +167,7 @@ exports.callback = async (req, res) => {
 
     const websiteBase = process.env.WEBSITE_URL || "http://localhost:3000";
     const target = paid
-      ? `${websiteBase}/requestsuccess/${service || "general"}`
+      ? `${websiteBase}/request_success/${service || "general"}`
       : `${websiteBase}/failure/${service || "general"}`;
     return res.redirect(target);
   } catch (err) {
