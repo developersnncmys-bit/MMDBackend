@@ -313,19 +313,31 @@ exports.refund = async (req, res) => {
       return res.json({ success: true, message: "Refund queued (pending)", lead });
     }
 
-    // Anything else is a failure.
+    // Anything else is a failure. Translate Paytm's terse codes into something
+    // an admin can act on.
     lead.refundStatus = "failed";
-    lead.refundError =
-      respBody.resultInfo?.resultMsg ||
-      `Refund failed (code ${respCode || "?"})`;
+    const rawMsg = respBody.resultInfo?.resultMsg || `Refund failed (code ${respCode || "?"})`;
+    const friendly = (() => {
+      if (respCode === "600") {
+        return `Paytm rejected the refund (code 600). This usually means the transaction hasn't settled yet — Paytm needs at least 1 business day (T+1) after payment before refunds are allowed. For small test amounts (₹1-₹9) some banks also block refunds. Try again tomorrow, or process this refund manually from your Paytm merchant dashboard.`;
+      }
+      if (respCode === "601") {
+        return `Already refunded at Paytm (code 601). The transaction may have been refunded manually earlier.`;
+      }
+      if (respCode === "501") {
+        return `Refund amount exceeds the refundable balance (code 501). The original transaction may already be partially refunded.`;
+      }
+      return rawMsg;
+    })();
+    lead.refundError = friendly;
     lead.notes.push({
-      text: `Refund of ₹${amount} FAILED: ${lead.refundError}`,
+      text: `Refund of ₹${amount} FAILED: ${friendly}`,
       author: "System",
     });
     await lead.save();
     return res.status(400).json({
       success: false,
-      message: lead.refundError,
+      message: friendly,
       paytmResponse: respBody,
     });
   } catch (err) {
