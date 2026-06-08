@@ -204,17 +204,33 @@ exports.refund = async (req, res) => {
 
     const lead = await Lead.findById(leadId);
     if (!lead) {
+      console.log("PG refund: lead not found", { leadId });
       return res.status(404).json({ success: false, message: "Lead not found" });
     }
+    console.log("PG refund attempt:", {
+      leadId,
+      orderId: lead.orderId,
+      paytmTxnId: lead.paytmTxnId,
+      paymentStatus: lead.paymentStatus,
+      refundStatus: lead.refundStatus,
+      amount: lead.amount,
+      requestedAmount: amount,
+    });
     if (lead.paymentStatus !== "paid") {
       return res
         .status(400)
         .json({ success: false, message: "Lead is not paid — nothing to refund" });
     }
-    if (!lead.orderId || !lead.paytmTxnId) {
+    if (!lead.orderId) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Lead has no order ID — cannot refund" });
+    }
+    if (!lead.paytmTxnId) {
       return res.status(400).json({
         success: false,
-        message: "Missing Paytm transaction id on this lead — cannot refund",
+        message:
+          "This lead was paid before the refund feature was deployed, so its Paytm transaction ID isn't stored. Only new payments (after today's backend deploy) can be refunded through the panel. For older payments, refund manually via Paytm dashboard.",
       });
     }
     if (lead.refundStatus === "refunded") {
