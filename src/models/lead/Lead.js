@@ -42,6 +42,24 @@ const leadSchema = new mongoose.Schema(
       default: "unpaid",
     },
 
+    // Paytm-side identifiers (captured from the success callback) — required
+    // to call the Paytm refund API later.
+    paytmTxnId: { type: String, default: "" },
+    paytmBankTxnId: { type: String, default: "" },
+    paidAt: { type: Date },
+
+    // Refund tracking — set when an admin issues a refund through the panel.
+    refundStatus: {
+      type: String,
+      enum: ["none", "pending", "refunded", "failed"],
+      default: "none",
+    },
+    refundAmount: { type: Number, default: 0 },
+    refundRefId: { type: String, default: "" },     // our REFID sent to Paytm
+    refundPaytmId: { type: String, default: "" },   // Paytm's refundId
+    refundedAt: { type: Date },
+    refundError: { type: String, default: "" },
+
     // CRM workflow
     status: { type: String, enum: LEAD_STATUSES, default: "new" },
     assignedTo: { type: String, default: "" },
