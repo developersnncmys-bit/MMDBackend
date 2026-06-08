@@ -316,19 +316,17 @@ exports.refund = async (req, res) => {
     // Anything else is a failure. Translate Paytm's terse codes into something
     // an admin can act on.
     lead.refundStatus = "failed";
-    const rawMsg = respBody.resultInfo?.resultMsg || `Refund failed (code ${respCode || "?"})`;
-    const friendly = (() => {
-      if (respCode === "600") {
-        return `Paytm rejected the refund (code 600). This usually means the transaction hasn't settled yet — Paytm needs at least 1 business day (T+1) after payment before refunds are allowed. For small test amounts (₹1-₹9) some banks also block refunds. Try again tomorrow, or process this refund manually from your Paytm merchant dashboard.`;
-      }
-      if (respCode === "601") {
-        return `Already refunded at Paytm (code 601). The transaction may have been refunded manually earlier.`;
-      }
-      if (respCode === "501") {
-        return `Refund amount exceeds the refundable balance (code 501). The original transaction may already be partially refunded.`;
-      }
-      return rawMsg;
+    // Always surface Paytm's own words — never hide them behind our guesses.
+    const rawMsg = respBody.resultInfo?.resultMsg || "";
+    const codeTxt = respCode ? `code ${respCode}` : "no code";
+    const paytmSays = rawMsg ? `Paytm's reason: "${rawMsg}"` : "Paytm returned no reason text";
+    // Add a short, accurate hint only for codes whose meaning is well-known.
+    const hint = (() => {
+      if (respCode === "601") return " (this transaction was already refunded earlier).";
+      if (respCode === "501") return " (refund amount exceeds the refundable balance — it may be partially refunded already).";
+      return ".";
     })();
+    const friendly = `Refund rejected by Paytm (${codeTxt}). ${paytmSays}${hint}`;
     lead.refundError = friendly;
     lead.notes.push({
       text: `Refund of ₹${amount} FAILED: ${friendly}`,
