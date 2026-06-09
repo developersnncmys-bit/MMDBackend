@@ -187,200 +187,26 @@ exports.callback = async (req, res) => {
 // Refunds the given amount to the original payment source (same UPI/card/etc.
 // the customer used — Paytm handles the routing automatically based on the
 // original TXNID).
-// exports.refund = async (req, res) => {
-//   try {
-//     const { leadId, amount } = req.body || {};
-//     if (!leadId || !amount || Number(amount) <= 0) {
-//       return res
-//         .status(400)
-//         .json({ success: false, message: "leadId and a positive amount are required" });
-//     }
-//     const cfg = paytm();
-//     if (!cfg.MID || !cfg.MERCHANT_KEY) {
-//       return res
-//         .status(500)
-//         .json({ success: false, message: "Paytm is not configured" });
-//     }
-
-//     const lead = await Lead.findById(leadId);
-//     if (!lead) {
-//       console.log("PG refund: lead not found", { leadId });
-//       return res.status(404).json({ success: false, message: "Lead not found" });
-//     }
-//     console.log("PG refund attempt:", {
-//       leadId,
-//       orderId: lead.orderId,
-//       paytmTxnId: lead.paytmTxnId,
-//       paymentStatus: lead.paymentStatus,
-//       refundStatus: lead.refundStatus,
-//       amount: lead.amount,
-//       requestedAmount: amount,
-//     });
-//     if (lead.paymentStatus !== "paid") {
-//       return res
-//         .status(400)
-//         .json({ success: false, message: "Lead is not paid — nothing to refund" });
-//     }
-//     if (!lead.orderId) {
-//       return res
-//         .status(400)
-//         .json({ success: false, message: "Lead has no order ID — cannot refund" });
-//     }
-//     if (!lead.paytmTxnId) {
-//       return res.status(400).json({
-//         success: false,
-//         message:
-//           "This lead was paid before the refund feature was deployed, so its Paytm transaction ID isn't stored. Only new payments (after today's backend deploy) can be refunded through the panel. For older payments, refund manually via Paytm dashboard.",
-//       });
-//     }
-//     if (lead.refundStatus === "refunded") {
-//       return res
-//         .status(400)
-//         .json({ success: false, message: "This lead has already been refunded" });
-//     }
-//     if (Number(amount) > Number(lead.amount || 0)) {
-//       return res.status(400).json({
-//         success: false,
-//         message: `Refund amount cannot exceed paid amount (₹${lead.amount})`,
-//       });
-//     }
-
-//     // Our refund reference id — must be unique per refund attempt.
-//     const refId = `REF${Date.now()}${Math.floor(Math.random() * 9000 + 1000)}`;
-//     const body = {
-//       mid: cfg.MID,
-//       txnType: "REFUND",
-//       orderId: lead.orderId,
-//       txnId: lead.paytmTxnId,
-//       refId,
-//       refundAmount: Number(amount).toFixed(2),
-//     };
-
-//     const signature = await PaytmChecksum.generateSignature(
-//       JSON.stringify(body),
-//       cfg.MERCHANT_KEY
-//     );
-//     const head = { signature };
-
-//     // Paytm refund endpoint — production: securegw, staging: securegw-stage.
-//     // Use the same base host as the transaction URL so prod/stage stay in sync.
-//     const base = (cfg.TRANSACTION_URL || "")
-//       .replace("/order/process", "")
-//       .replace("/theia/processTransaction", "");
-//     const refundUrl = `${base}/refund/apply`;
-
-//     console.log("PG refund request:", { refundUrl, body });
-
-//     const resp = await fetch(refundUrl, {
-//       method: "POST",
-//       headers: { "Content-Type": "application/json" },
-//       body: JSON.stringify({ head, body }),
-//     });
-//     const data = await resp.json().catch(() => ({}));
-//     console.log("PG refund response:", data);
-
-//     const respBody = data.body || {};
-//     const respCode = respBody.resultInfo?.resultCode;
-//     // Paytm returns resultStatus = TXN_SUCCESS for instant refunds, or
-//     // PENDING when the refund is queued for async processing.
-//     const status = respBody.resultInfo?.resultStatus;
-
-//     if (status === "TXN_SUCCESS") {
-//       lead.refundStatus = "refunded";
-//       lead.refundAmount = Number(amount);
-//       lead.refundRefId = refId;
-//       lead.refundPaytmId = respBody.refundId || "";
-//       lead.refundedAt = new Date();
-//       lead.refundError = "";
-//       lead.notes.push({
-//         text: `Refund of ₹${amount} processed via Paytm. RefundId: ${respBody.refundId || refId}`,
-//         author: "System",
-//       });
-//       await lead.save();
-//       return res.json({ success: true, message: "Refund processed", lead });
-//     }
-//     if (status === "PENDING") {
-//       lead.refundStatus = "pending";
-//       lead.refundAmount = Number(amount);
-//       lead.refundRefId = refId;
-//       lead.refundPaytmId = respBody.refundId || "";
-//       lead.refundError = "";
-//       lead.notes.push({
-//         text: `Refund of ₹${amount} queued at Paytm (pending). RefId: ${refId}`,
-//         author: "System",
-//       });
-//       await lead.save();
-//       return res.json({ success: true, message: "Refund queued (pending)", lead });
-//     }
-
-//     // Anything else is a failure. Translate Paytm's terse codes into something
-//     // an admin can act on.
-//     lead.refundStatus = "failed";
-//     // Always surface Paytm's own words — never hide them behind our guesses.
-//     const rawMsg = respBody.resultInfo?.resultMsg || "";
-//     const codeTxt = respCode ? `code ${respCode}` : "no code";
-//     const paytmSays = rawMsg ? `Paytm's reason: "${rawMsg}"` : "Paytm returned no reason text";
-//     // Add a short, accurate hint only for codes whose meaning is well-known.
-//     const hint = (() => {
-//       if (respCode === "601") return " (this transaction was already refunded earlier).";
-//       if (respCode === "501") return " (refund amount exceeds the refundable balance — it may be partially refunded already).";
-//       return ".";
-//     })();
-//     const friendly = `Refund rejected by Paytm (${codeTxt}). ${paytmSays}${hint}`;
-//     lead.refundError = friendly;
-//     lead.notes.push({
-//       text: `Refund of ₹${amount} FAILED: ${friendly}`,
-//       author: "System",
-//     });
-//     await lead.save();
-//     return res.status(400).json({
-//       success: false,
-//       message: friendly,
-//       paytmResponse: respBody,
-//     });
-//   } catch (err) {
-//     console.error("PG refund error:", err);
-//     return res
-//       .status(500)
-//       .json({ success: false, message: err.message || "Server error" });
-//   }
-// };
 exports.refund = async (req, res) => {
   try {
     const { leadId, amount } = req.body || {};
-    const requestedAmount = Number(amount);
-
-    if (
-      !leadId ||
-      !Number.isFinite(requestedAmount) ||
-      requestedAmount <= 0
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "leadId and a positive amount are required",
-      });
+    if (!leadId || !amount || Number(amount) <= 0) {
+      return res
+        .status(400)
+        .json({ success: false, message: "leadId and a positive amount are required" });
     }
-
     const cfg = paytm();
-
-    if (!cfg?.MID || !cfg?.MERCHANT_KEY) {
-      return res.status(500).json({
-        success: false,
-        message: "Paytm is not configured",
-      });
+    if (!cfg.MID || !cfg.MERCHANT_KEY) {
+      return res
+        .status(500)
+        .json({ success: false, message: "Paytm is not configured" });
     }
 
     const lead = await Lead.findById(leadId);
-
     if (!lead) {
       console.log("PG refund: lead not found", { leadId });
-
-      return res.status(404).json({
-        success: false,
-        message: "Lead not found",
-      });
+      return res.status(404).json({ success: false, message: "Lead not found" });
     }
-
     console.log("PG refund attempt:", {
       leadId,
       orderId: lead.orderId,
@@ -388,279 +214,134 @@ exports.refund = async (req, res) => {
       paymentStatus: lead.paymentStatus,
       refundStatus: lead.refundStatus,
       amount: lead.amount,
-      requestedAmount,
+      requestedAmount: amount,
     });
-
     if (lead.paymentStatus !== "paid") {
-      return res.status(400).json({
-        success: false,
-        message: "Lead is not paid — nothing to refund",
-      });
+      return res
+        .status(400)
+        .json({ success: false, message: "Lead is not paid — nothing to refund" });
     }
-
     if (!lead.orderId) {
-      return res.status(400).json({
-        success: false,
-        message: "Lead has no order ID — cannot refund",
-      });
+      return res
+        .status(400)
+        .json({ success: false, message: "Lead has no order ID — cannot refund" });
     }
-
     if (!lead.paytmTxnId) {
       return res.status(400).json({
         success: false,
         message:
-          "Paytm transaction ID is not stored. Refund this payment manually through the Paytm dashboard.",
+          "This lead was paid before the refund feature was deployed, so its Paytm transaction ID isn't stored. Only new payments (after today's backend deploy) can be refunded through the panel. For older payments, refund manually via Paytm dashboard.",
       });
     }
-
-    if (
-      lead.refundStatus === "pending" ||
-      lead.refundStatus === "processing"
-    ) {
-      return res.status(409).json({
-        success: false,
-        message:
-          "A refund is already pending. Check its status before trying again.",
-      });
+    if (lead.refundStatus === "refunded") {
+      return res
+        .status(400)
+        .json({ success: false, message: "This lead has already been refunded" });
     }
-
-    const paidAmount = Number(lead.amount || 0);
-    const alreadyRefundedAmount = Number(
-      lead.totalRefundedAmount ||
-        (lead.refundStatus === "refunded"
-          ? lead.refundAmount
-          : 0) ||
-        0
-    );
-
-    const refundableBalance = Math.max(
-      0,
-      paidAmount - alreadyRefundedAmount
-    );
-
-    if (refundableBalance <= 0) {
+    if (Number(amount) > Number(lead.amount || 0)) {
       return res.status(400).json({
         success: false,
-        message: "This payment has already been fully refunded",
+        message: `Refund amount cannot exceed paid amount (₹${lead.amount})`,
       });
     }
 
-    if (requestedAmount > refundableBalance) {
-      return res.status(400).json({
-        success: false,
-        message: `Refund amount cannot exceed refundable balance ₹${refundableBalance.toFixed(
-          2
-        )}`,
-      });
-    }
-
-    // Must be unique for every refund attempt.
-    const refId = `REF${Date.now()}${Math.floor(
-      Math.random() * 9000 + 1000
-    )}`;
-
+    // Our refund reference id — must be unique per refund attempt.
+    const refId = `REF${Date.now()}${Math.floor(Math.random() * 9000 + 1000)}`;
     const body = {
-      mid: String(cfg.MID),
+      mid: cfg.MID,
       txnType: "REFUND",
-      orderId: String(lead.orderId),
-      txnId: String(lead.paytmTxnId),
+      orderId: lead.orderId,
+      txnId: lead.paytmTxnId,
       refId,
-      refundAmount: requestedAmount.toFixed(2),
-      comments: `Refund for lead ${lead._id}`,
+      refundAmount: Number(amount).toFixed(2),
     };
 
     const signature = await PaytmChecksum.generateSignature(
       JSON.stringify(body),
       cfg.MERCHANT_KEY
     );
+    const head = { signature };
 
-    const payload = {
-      head: {
-        signature,
-      },
-      body,
-    };
+    // Paytm refund endpoint — production: securegw, staging: securegw-stage.
+    // Use the same base host as the transaction URL so prod/stage stay in sync.
+    const base = (cfg.TRANSACTION_URL || "")
+      .replace("/order/process", "")
+      .replace("/theia/processTransaction", "");
+    const refundUrl = `${base}/refund/apply`;
 
-    const isStaging = String(
-      cfg.TRANSACTION_URL || ""
-    ).includes("securegw-stage.paytm.in");
-
-    const baseUrl = isStaging
-      ? "https://securegw-stage.paytm.in"
-      : "https://securegw.paytm.in";
-
-    const refundUrl =
-      `${baseUrl}/refund/api/v1/async/refund` +
-      `?mid=${encodeURIComponent(cfg.MID)}` +
-      `&orderId=${encodeURIComponent(lead.orderId)}`;
-
-    console.log("PG refund request:", {
-      refundUrl,
-      body,
-    });
+    console.log("PG refund request:", { refundUrl, body });
 
     const resp = await fetch(refundUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(30000),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ head, body }),
     });
+    const data = await resp.json().catch(() => ({}));
+    console.log("PG refund response:", data);
 
-    const responseText = await resp.text();
+    const respBody = data.body || {};
+    const respCode = respBody.resultInfo?.resultCode;
+    // Paytm returns resultStatus = TXN_SUCCESS for instant refunds, or
+    // PENDING when the refund is queued for async processing.
+    const status = respBody.resultInfo?.resultStatus;
 
-    let data = {};
-
-    try {
-      data = responseText
-        ? JSON.parse(responseText)
-        : {};
-    } catch (parseError) {
-      console.error("PG refund invalid response:", {
-        httpStatus: resp.status,
-        responseText,
-      });
-
-      return res.status(502).json({
-        success: false,
-        message: "Paytm returned an invalid response",
-      });
-    }
-
-    console.log("PG refund response:", {
-      httpStatus: resp.status,
-      body: data?.body,
-    });
-
-    const respBody = data?.body || {};
-    const resultInfo = respBody?.resultInfo || {};
-
-    const respCode = String(
-      resultInfo.resultCode || ""
-    );
-
-    const status = String(
-      resultInfo.resultStatus || ""
-    ).toUpperCase();
-
-    const rawMessage =
-      resultInfo.resultMsg ||
-      "Paytm returned no reason";
-
-    lead.notes = Array.isArray(lead.notes)
-      ? lead.notes
-      : [];
-
-    /*
-     * Async refund submission only means Paytm accepted the request
-     * for processing. Do not mark it refunded yet.
-     */
-    const acceptedStatuses = [
-      "PENDING",
-      "TXN_SUCCESS",
-      "SUCCESS",
-      "S",
-    ];
-
-    if (
-      resp.ok &&
-      acceptedStatuses.includes(status)
-    ) {
-      lead.refundStatus = "pending";
-      lead.refundAmount = requestedAmount;
+    if (status === "TXN_SUCCESS") {
+      lead.refundStatus = "refunded";
+      lead.refundAmount = Number(amount);
       lead.refundRefId = refId;
-      lead.refundPaytmId =
-        respBody.refundId || "";
-      lead.refundRequestedAt = new Date();
-      lead.refundedAt = null;
+      lead.refundPaytmId = respBody.refundId || "";
+      lead.refundedAt = new Date();
       lead.refundError = "";
-
       lead.notes.push({
-        text:
-          `Refund of ₹${requestedAmount.toFixed(
-            2
-          )} submitted to Paytm. ` +
-          `RefId: ${refId}. Status: ${status}.`,
+        text: `Refund of ₹${amount} processed via Paytm. RefundId: ${respBody.refundId || refId}`,
         author: "System",
       });
-
       await lead.save();
-
-      return res.status(202).json({
-        success: true,
-        message:
-          "Refund request submitted to Paytm and is pending confirmation.",
-        refund: {
-          status: "pending",
-          amount: requestedAmount,
-          refId,
-          refundId:
-            respBody.refundId || null,
-          resultCode: respCode || null,
-          paytmMessage: rawMessage,
-        },
-        lead,
+      return res.json({ success: true, message: "Refund processed", lead });
+    }
+    if (status === "PENDING") {
+      lead.refundStatus = "pending";
+      lead.refundAmount = Number(amount);
+      lead.refundRefId = refId;
+      lead.refundPaytmId = respBody.refundId || "";
+      lead.refundError = "";
+      lead.notes.push({
+        text: `Refund of ₹${amount} queued at Paytm (pending). RefId: ${refId}`,
+        author: "System",
       });
+      await lead.save();
+      return res.json({ success: true, message: "Refund queued (pending)", lead });
     }
 
-    let hint = "";
-
-    if (respCode === "501") {
-      hint =
-        " The amount may exceed the remaining refundable balance.";
-    } else if (respCode === "600") {
-      hint =
-        " Verify the original transaction status and refundable balance. If it also fails in the Paytm dashboard, the bank or payment mode is restricting the refund.";
-    } else if (respCode === "601") {
-      hint =
-        " This transaction may already have been refunded.";
-    }
-
-    const friendlyMessage =
-      `Refund rejected by Paytm` +
-      `${respCode ? ` (code ${respCode})` : ""}. ` +
-      `Paytm's reason: "${rawMessage}".${hint}`;
-
+    // Anything else is a failure. Translate Paytm's terse codes into something
+    // an admin can act on.
     lead.refundStatus = "failed";
-    lead.refundAmount = requestedAmount;
-    lead.refundRefId = refId;
-    lead.refundPaytmId =
-      respBody.refundId || "";
-    lead.refundError = friendlyMessage;
-
+    // Always surface Paytm's own words — never hide them behind our guesses.
+    const rawMsg = respBody.resultInfo?.resultMsg || "";
+    const codeTxt = respCode ? `code ${respCode}` : "no code";
+    const paytmSays = rawMsg ? `Paytm's reason: "${rawMsg}"` : "Paytm returned no reason text";
+    // Add a short, accurate hint only for codes whose meaning is well-known.
+    const hint = (() => {
+      if (respCode === "601") return " (this transaction was already refunded earlier).";
+      if (respCode === "501") return " (refund amount exceeds the refundable balance — it may be partially refunded already).";
+      return ".";
+    })();
+    const friendly = `Refund rejected by Paytm (${codeTxt}). ${paytmSays}${hint}`;
+    lead.refundError = friendly;
     lead.notes.push({
-      text:
-        `Refund of ₹${requestedAmount.toFixed(
-          2
-        )} FAILED: ${friendlyMessage}`,
+      text: `Refund of ₹${amount} FAILED: ${friendly}`,
       author: "System",
     });
-
     await lead.save();
-
     return res.status(400).json({
       success: false,
-      message: friendlyMessage,
+      message: friendly,
       paytmResponse: respBody,
     });
   } catch (err) {
     console.error("PG refund error:", err);
-
-    if (
-      err?.name === "TimeoutError" ||
-      err?.name === "AbortError"
-    ) {
-      return res.status(504).json({
-        success: false,
-        message: "Paytm refund request timed out",
-      });
-    }
-
-    return res.status(500).json({
-      success: false,
-      message:
-        err?.message || "Server error",
-    });
+    return res
+      .status(500)
+      .json({ success: false, message: err.message || "Server error" });
   }
 };
