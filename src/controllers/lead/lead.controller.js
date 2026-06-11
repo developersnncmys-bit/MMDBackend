@@ -112,20 +112,52 @@ exports.createLead = async (req, res) => {
 };
 
 // admin panel list — supports ?status= and ?search=
+// Hard ceiling on how many leads we ever return in one response. After the
+// 18k-lead migration, returning every lead at once produced a ~52MB payload
+// that the (free-tier) host could not serialize/send -> 500/502 -> blank panel.
+// We now return the most-recent N (indexed by createdAt), which keeps the
+// existing all-in-memory admin panel working. `?limit=` can request fewer;
+// `?page=` pages through older records. Accurate per-status totals still come
+// from /leads/stats, which only reads tiny fields.
+const LEADS_MAX_LIMIT = 3000;
+const LEADS_DEFAULT_LIMIT = 1000;
+
 exports.listLeads = async (req, res) => {
   try {
-    const { status, search } = req.query;
+    const { status, search, assignedTo } = req.query;
     const query = {};
 
     if (status) query.status = status;
+    if (assignedTo) query.assignedTo = assignedTo;
     if (search) {
-      const rx = new RegExp(String(search).trim(), "i");
-      query.$or = [{ name: rx }, { mobileNumber: rx }, { orderId: rx }];
+      const rx = new RegExp(
+        String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+        "i"
+      );
+      query.$or = [{ name: rx }, { mobileNumber: rx }, { orderId: rx }, { email: rx }];
     }
 
-    const data = await Lead.find(query).sort({ createdAt: -1 });
+    const limit = Math.min(
+      LEADS_MAX_LIMIT,
+      Math.max(1, parseInt(req.query.limit, 10) || LEADS_DEFAULT_LIMIT)
+    );
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+
+    // total matching (cheap with the {status,createdAt} / {createdAt} indexes)
+    const total = await Lead.countDocuments(query);
+    const data = await Lead.find(query)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit);
     const out = data.map(serializeLead);
-    return res.json({ success: true, count: out.length, data: out });
+    return res.json({
+      success: true,
+      count: out.length,
+      total,
+      page,
+      limit,
+      data: out,
+    });
   } catch (err) {
     console.error("listLeads error:", err);
     return res.status(500).json({ success: false, message: "Server error" });
