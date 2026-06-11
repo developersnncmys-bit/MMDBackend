@@ -28,9 +28,18 @@ const SCHEDULED_STATUSES = ["followup", "today", "overdue"];
 const localToday = () =>
   new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 
+// followUpDate may be a real Date (migrated/legacy rows) OR a "YYYY-MM-DD"
+// string. Normalize both to an IST calendar date so bucketing is consistent.
+const toYMD = (v) => {
+  if (!v) return "";
+  if (v instanceof Date)
+    return v.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+  return String(v).slice(0, 10);
+};
+
 const effectiveStatus = (status, followUpDate) => {
   if (!followUpDate || !SCHEDULED_STATUSES.includes(status)) return status;
-  const fu = String(followUpDate).slice(0, 10);
+  const fu = toYMD(followUpDate);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fu)) return status;
   const today = localToday();
   if (fu < today) return "overdue";
@@ -273,8 +282,6 @@ exports.deleteLead = async (req, res) => {
 // even at 18k+ and is safe to poll frequently.
 exports.getStats = async (req, res) => {
   try {
-    const today = localToday();
-
     // counts per STORED status (server-side group, no documents transferred)
     const grouped = await Lead.aggregate([
       { $group: { _id: "$status", n: { $sum: 1 } } },
@@ -286,23 +293,29 @@ exports.getStats = async (req, res) => {
       total += g.n;
     }
 
-    // scheduled leads (followup/today/overdue) split by their followUpDate
-    const overdue = await Lead.countDocuments({
-      status: { $in: SCHEDULED_STATUSES },
-      followUpDate: { $regex: /^\d{4}-\d{2}-\d{2}/, $lt: today },
-    });
-    const todayCount = await Lead.countDocuments({
-      status: { $in: SCHEDULED_STATUSES },
-      followUpDate: new RegExp("^" + today),
-    });
-    const scheduledTotal =
-      (byStored.followup || 0) + (byStored.today || 0) + (byStored.overdue || 0);
+    // Scheduled leads split into followup/today/overdue by followUpDate. This
+    // set is small (only leads in a scheduled status), so bucket them in JS via
+    // effectiveStatus — which handles both Date and "YYYY-MM-DD" values. A
+    // $regex query would silently miss Date-typed followUpDate values.
+    const scheduled = await Lead.find(
+      { status: { $in: SCHEDULED_STATUSES } },
+      "status followUpDate"
+    ).lean();
+    let overdue = 0;
+    let todayCount = 0;
+    let followup = 0;
+    for (const l of scheduled) {
+      const eff = effectiveStatus(l.status, l.followUpDate);
+      if (eff === "overdue") overdue += 1;
+      else if (eff === "today") todayCount += 1;
+      else followup += 1;
+    }
 
     const stats = {
       new: byStored.new || 0,
       overdue,
       today: todayCount,
-      followup: Math.max(0, scheduledTotal - overdue - todayCount),
+      followup,
       inprocess: byStored.inprocess || 0,
       converted: byStored.converted || 0,
       dead: byStored.dead || 0,
