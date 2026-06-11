@@ -112,15 +112,16 @@ exports.createLead = async (req, res) => {
 };
 
 // admin panel list — supports ?status= and ?search=
-// Hard ceiling on how many leads we ever return in one response. After the
-// 18k-lead migration, returning every lead at once produced a ~52MB payload
-// that the (free-tier) host could not serialize/send -> 500/502 -> blank panel.
-// We now return the most-recent N (indexed by createdAt), which keeps the
-// existing all-in-memory admin panel working. `?limit=` can request fewer;
-// `?page=` pages through older records. Accurate per-status totals still come
-// from /leads/stats, which only reads tiny fields.
-const LEADS_MAX_LIMIT = 3000;
-const LEADS_DEFAULT_LIMIT = 1000;
+// Returns EVERY matching lead but LEAN and with only the fields the list /
+// table / search / dashboard actually use. Excluding the heavy `formData`
+// blob (and using .lean(), which skips Mongoose hydration) is what keeps an
+// 18k-lead response small (~8MB) and fast enough to serve — the previous
+// "return full documents" version produced ~52MB and 500/502'd the host,
+// blanking the panel. The detail view fetches the full lead (incl. formData)
+// separately via getLeadById.
+const LEAD_LIST_FIELDS =
+  "slNo name mobileNumber email service status assignedTo amount paymentStatus " +
+  "district state date time createdAt followUpDate orderId leadType source";
 
 exports.listLeads = async (req, res) => {
   try {
@@ -137,27 +138,19 @@ exports.listLeads = async (req, res) => {
       query.$or = [{ name: rx }, { mobileNumber: rx }, { orderId: rx }, { email: rx }];
     }
 
-    const limit = Math.min(
-      LEADS_MAX_LIMIT,
-      Math.max(1, parseInt(req.query.limit, 10) || LEADS_DEFAULT_LIMIT)
-    );
-    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-
-    // total matching (cheap with the {status,createdAt} / {createdAt} indexes)
-    const total = await Lead.countDocuments(query);
     const data = await Lead.find(query)
+      .select(LEAD_LIST_FIELDS)
       .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit);
-    const out = data.map(serializeLead);
-    return res.json({
-      success: true,
-      count: out.length,
-      total,
-      page,
-      limit,
-      data: out,
+      .lean(); // plain objects — far cheaper than hydrating 18k documents
+    // .lean() bypasses the schema toJSON transform, so map _id -> id and apply
+    // the derived follow-up bucket ourselves to match the normal shape.
+    const out = data.map((o) => {
+      o.id = String(o._id);
+      delete o._id;
+      o.status = effectiveStatus(o.status, o.followUpDate);
+      return o;
     });
+    return res.json({ success: true, count: out.length, data: out });
   } catch (err) {
     console.error("listLeads error:", err);
     return res.status(500).json({ success: false, message: "Server error" });
