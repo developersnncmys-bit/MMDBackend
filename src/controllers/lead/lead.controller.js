@@ -282,8 +282,14 @@ exports.deleteLead = async (req, res) => {
 // even at 18k+ and is safe to poll frequently.
 exports.getStats = async (req, res) => {
   try {
+    // Optional ?assignedTo= scopes the counts to one employee (so an employee's
+    // dashboard shows THEIR numbers); omitted = whole pipeline (admin).
+    const match = {};
+    if (req.query.assignedTo) match.assignedTo = String(req.query.assignedTo);
+
     // counts per STORED status (server-side group, no documents transferred)
     const grouped = await Lead.aggregate([
+      { $match: match },
       { $group: { _id: "$status", n: { $sum: 1 } } },
     ]);
     const byStored = {};
@@ -298,7 +304,7 @@ exports.getStats = async (req, res) => {
     // effectiveStatus — which handles both Date and "YYYY-MM-DD" values. A
     // $regex query would silently miss Date-typed followUpDate values.
     const scheduled = await Lead.find(
-      { status: { $in: SCHEDULED_STATUSES } },
+      { ...match, status: { $in: SCHEDULED_STATUSES } },
       "status followUpDate"
     ).lean();
     let overdue = 0;
