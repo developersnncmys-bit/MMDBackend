@@ -10,6 +10,11 @@ const userSchema = new mongoose.Schema(
     username: { type: String, required: true, unique: true, trim: true },
     // never returned to the client — see toJSON transform and `select: false`
     password: { type: String, required: true, select: false },
+    // Plain-text copy of the password, kept ON PURPOSE so admins can view a
+    // team member's password in Team Settings (requested by the business).
+    // SECURITY NOTE: anyone with admin/DB access can read these, and a DB leak
+    // exposes every password. This is an explicit, accepted trade-off.
+    passwordPlain: { type: String, default: "" },
     role: { type: String, enum: ["admin", "employee"], default: "employee" },
     status: { type: String, enum: ["active", "inactive"], default: "active" },
   },
@@ -29,6 +34,8 @@ const userSchema = new mongoose.Schema(
 
 userSchema.pre("save", async function (next) {
   if (!this.isModified("password")) return next();
+  // Keep a viewable copy before hashing (admin "show password" feature).
+  this.passwordPlain = this.password;
   this.password = await bcrypt.hash(this.password, 10);
   next();
 });
