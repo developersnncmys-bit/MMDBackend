@@ -21,12 +21,12 @@ const istTime = () =>
 // stored status as the admin set it and recompute the display bucket on read.
 const SCHEDULED_STATUSES = ["followup", "today", "overdue"];
 
-const localToday = () => {
-  const n = new Date();
-  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(
-    n.getDate()
-  ).padStart(2, "0")}`;
-};
+// "Today" for follow-up bucketing must be India time — the Render server runs
+// UTC (~5.5h behind IST), which otherwise pushes a follow-up dated for today
+// into the wrong bucket near midnight. Follow-up dates are entered/stored in
+// IST, so compare against the IST date.
+const localToday = () =>
+  new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 
 const effectiveStatus = (status, followUpDate) => {
   if (!followUpDate || !SCHEDULED_STATUSES.includes(status)) return status;
