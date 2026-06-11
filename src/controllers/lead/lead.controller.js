@@ -268,26 +268,46 @@ exports.deleteLead = async (req, res) => {
 };
 
 // dashboard counts — uses the derived follow-up buckets so the totals match
-// what the admin sees in each list
+// what the admin sees in each list. Computed server-side (aggregation + a
+// couple of targeted counts) instead of loading every lead, so it stays cheap
+// even at 18k+ and is safe to poll frequently.
 exports.getStats = async (req, res) => {
   try {
-    const leads = await Lead.find({}, "status followUpDate").lean();
+    const today = localToday();
+
+    // counts per STORED status (server-side group, no documents transferred)
+    const grouped = await Lead.aggregate([
+      { $group: { _id: "$status", n: { $sum: 1 } } },
+    ]);
+    const byStored = {};
+    let total = 0;
+    for (const g of grouped) {
+      byStored[g._id || ""] = g.n;
+      total += g.n;
+    }
+
+    // scheduled leads (followup/today/overdue) split by their followUpDate
+    const overdue = await Lead.countDocuments({
+      status: { $in: SCHEDULED_STATUSES },
+      followUpDate: { $regex: /^\d{4}-\d{2}-\d{2}/, $lt: today },
+    });
+    const todayCount = await Lead.countDocuments({
+      status: { $in: SCHEDULED_STATUSES },
+      followUpDate: new RegExp("^" + today),
+    });
+    const scheduledTotal =
+      (byStored.followup || 0) + (byStored.today || 0) + (byStored.overdue || 0);
 
     const stats = {
-      new: 0,
-      overdue: 0,
-      today: 0,
-      followup: 0,
-      inprocess: 0,
-      converted: 0,
-      dead: 0,
-      total: 0,
+      new: byStored.new || 0,
+      overdue,
+      today: todayCount,
+      followup: Math.max(0, scheduledTotal - overdue - todayCount),
+      inprocess: byStored.inprocess || 0,
+      converted: byStored.converted || 0,
+      dead: byStored.dead || 0,
+      total,
     };
-    for (const l of leads) {
-      const status = effectiveStatus(l.status, l.followUpDate);
-      if (status in stats) stats[status] += 1;
-      stats.total += 1;
-    }
 
     return res.json({ success: true, data: stats });
   } catch (err) {
