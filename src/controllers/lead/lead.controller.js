@@ -132,11 +132,53 @@ const LEAD_LIST_FIELDS =
   "slNo name mobileNumber email service status assignedTo amount paymentStatus " +
   "district state date time createdAt followUpDate orderId leadType source";
 
+// Run the lean list query and normalize each row (id + derived status bucket).
+const buildLeadList = async (query = {}) => {
+  const data = await Lead.find(query)
+    .select(LEAD_LIST_FIELDS)
+    .sort({ createdAt: -1 })
+    .lean(); // plain objects — far cheaper than hydrating 18k documents
+  return data.map((o) => {
+    o.id = String(o._id);
+    delete o._id;
+    o.status = effectiveStatus(o.status, o.followUpDate);
+    return o;
+  });
+};
+
+// In-memory cache of the FULL (unfiltered) lead list, refreshed in the
+// background. The admin panel loads the whole list on startup; querying ~18k
+// leads from the (cloud) DB takes several seconds, so without this every page
+// load waited on that. With the cache, the panel is served instantly and the
+// expensive query runs at most once per interval — no matter how many admins
+// are open. Up to ~25s staleness, which is fine for a CRM (and the panel does
+// optimistic updates for the user's own actions anyway).
+let leadListCache = { data: null, builtAt: 0 };
+const refreshLeadCache = async () => {
+  try {
+    leadListCache = { data: await buildLeadList({}), builtAt: Date.now() };
+  } catch (err) {
+    console.error("lead cache refresh failed:", err.message);
+  }
+};
+// Keep it warm. First tick fires after the interval; we also build lazily on the
+// first request below so a freshly-started server isn't cold.
+setInterval(refreshLeadCache, 25_000);
+
 exports.listLeads = async (req, res) => {
   try {
     const { status, search, assignedTo } = req.query;
-    const query = {};
 
+    // No filters → the panel's main load. Serve the cached full list instantly
+    // (building it once if the cache is still cold).
+    if (!status && !search && !assignedTo) {
+      if (!leadListCache.data) await refreshLeadCache();
+      const data = leadListCache.data || [];
+      return res.json({ success: true, count: data.length, data });
+    }
+
+    // Filtered queries are smaller and run directly (not cached).
+    const query = {};
     if (status) query.status = status;
     if (assignedTo) query.assignedTo = assignedTo;
     if (search) {
@@ -147,18 +189,7 @@ exports.listLeads = async (req, res) => {
       query.$or = [{ name: rx }, { mobileNumber: rx }, { orderId: rx }, { email: rx }];
     }
 
-    const data = await Lead.find(query)
-      .select(LEAD_LIST_FIELDS)
-      .sort({ createdAt: -1 })
-      .lean(); // plain objects — far cheaper than hydrating 18k documents
-    // .lean() bypasses the schema toJSON transform, so map _id -> id and apply
-    // the derived follow-up bucket ourselves to match the normal shape.
-    const out = data.map((o) => {
-      o.id = String(o._id);
-      delete o._id;
-      o.status = effectiveStatus(o.status, o.followUpDate);
-      return o;
-    });
+    const out = await buildLeadList(query);
     return res.json({ success: true, count: out.length, data: out });
   } catch (err) {
     console.error("listLeads error:", err);
