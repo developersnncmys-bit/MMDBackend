@@ -111,6 +111,10 @@ exports.createLead = async (req, res) => {
         b.formData && typeof b.formData === "object" ? b.formData : {},
     });
 
+    // Refresh the cached list in the background so an admin-added lead shows up
+    // on the next fetch instead of waiting for the 25s background refresh.
+    refreshLeadCache().catch(() => {});
+
     return res
       .status(201)
       .json({ success: true, message: "Lead created", data: serializeLead(lead) });
@@ -299,6 +303,14 @@ exports.deleteLead = async (req, res) => {
       return res
         .status(404)
         .json({ success: false, message: "Lead not found" });
+    }
+    // Keep the in-memory cache in sync immediately, otherwise the next list
+    // fetch returns the cached (still-present) lead and it "reappears" until
+    // the 25s background refresh — which is why deletes seemed to need many
+    // refreshes to stick.
+    if (leadListCache.data) {
+      const id = String(req.params.id);
+      leadListCache.data = leadListCache.data.filter((l) => l.id !== id);
     }
     return res.json({ success: true, message: "Lead deleted" });
   } catch (err) {
