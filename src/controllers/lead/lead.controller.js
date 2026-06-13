@@ -111,9 +111,8 @@ exports.createLead = async (req, res) => {
         b.formData && typeof b.formData === "object" ? b.formData : {},
     });
 
-    // Refresh the cached list in the background so an admin-added lead shows up
-    // on the next fetch instead of waiting for the 25s background refresh.
-    refreshLeadCache().catch(() => {});
+    // Add the new lead to the cache so it appears on the next fetch.
+    upsertLeadCache(lead);
 
     return res
       .status(201)
@@ -148,6 +147,27 @@ const buildLeadList = async (query = {}) => {
     o.status = effectiveStatus(o.status, o.followUpDate);
     return o;
   });
+};
+
+// Convert a single Lead doc to the lean list-row shape used in the cache, so a
+// create/update can patch the cache directly instead of waiting for the 25s
+// background rebuild (which is why a status change "needed many refreshes").
+const LEAD_LIST_KEYS = LEAD_LIST_FIELDS.split(/\s+/);
+const toLeadListRow = (doc) => {
+  const o = typeof doc.toObject === "function" ? doc.toObject() : doc;
+  const row = { id: String(o._id) };
+  for (const k of LEAD_LIST_KEYS) row[k] = o[k];
+  row.status = effectiveStatus(o.status, o.followUpDate);
+  return row;
+};
+
+// Patch (or insert) one lead in the cached list.
+const upsertLeadCache = (doc) => {
+  if (!leadListCache.data) return;
+  const row = toLeadListRow(doc);
+  const idx = leadListCache.data.findIndex((l) => l.id === row.id);
+  if (idx !== -1) leadListCache.data[idx] = row;
+  else leadListCache.data.unshift(row);
 };
 
 // In-memory cache of the FULL (unfiltered) lead list, refreshed in the
@@ -263,6 +283,9 @@ exports.updateLead = async (req, res) => {
         .status(404)
         .json({ success: false, message: "Lead not found" });
     }
+    // Patch the cache so the new status/assignee/etc. shows on the next fetch
+    // (and survives a page refresh) instead of waiting for the 25s rebuild.
+    upsertLeadCache(lead);
     return res.json({ success: true, message: "Lead updated", data: serializeLead(lead) });
   } catch (err) {
     console.error("updateLead error:", err);
