@@ -185,9 +185,12 @@ const refreshLeadCache = async () => {
     console.error("lead cache refresh failed:", err.message);
   }
 };
-// Keep it warm. First tick fires after the interval; we also build lazily on the
-// first request below so a freshly-started server isn't cold.
-setInterval(refreshLeadCache, 25_000);
+// NOTE: no background setInterval refresh. A periodic rebuild could finish a DB
+// query that started BEFORE a delete/update and overwrite the cache with stale
+// data — which made deletes/status-changes "sometimes" revert. Every write goes
+// through create/update/delete here and patches the cache directly, so it stays
+// correct without a background rebuild. (After a direct DB change such as a
+// migration/sync script, restart the backend to rebuild the cache.)
 
 exports.listLeads = async (req, res) => {
   try {
