@@ -30,30 +30,17 @@ exports.sendPaymentSms = async ({ mobile, name, service, link }) => {
   const safeName = name || "Customer";
   const safeLink = link || "https://wa.me/919980097315";
 
-  // MSG91 Flow templates are picky about variable names — they must match
-  // EXACTLY what was defined when the flow was created. Without dashboard
-  // access we don't know if the template uses `name`/`var1` or `NAME`/`VAR1`
-  // or `##name##`/`##link##` style. Send the value under every common name
-  // so whichever the template expects gets filled. MSG91 silently ignores
-  // variable names the template doesn't reference.
-  const recipient = {
-    mobiles,
-    name: safeName, NAME: safeName,
-    var1: safeName, VAR1: safeName,
-    customer: safeName, Customer: safeName,
-    var2: safeLink, VAR2: safeLink,
-    link: safeLink, LINK: safeLink,
-    url: safeLink, URL: safeLink,
-  };
-
+  // FLAT MSG91 flow payload — this is the structure the working (old) system
+  // used: flow_id + top-level name/var1/var2 (NOT a recipients[] array). The
+  // recipients form wasn't filling the template's link variable. Send the link
+  // in both var1 and var2 so whichever the template references gets it.
   const payload = {
-    template_id,
+    flow_id: template_id,
     sender: process.env.MSG91_SENDER_ID,
-    short_url: "0",
-    // Ask MSG91 to return delivery info synchronously so we can see what
-    // went wrong without dashboard access.
-    realTimeResponse: "1",
-    recipients: [recipient],
+    mobiles,
+    name: safeName,
+    var1: safeLink,
+    var2: safeLink,
   };
 
   try {
@@ -70,7 +57,7 @@ exports.sendPaymentSms = async ({ mobile, name, service, link }) => {
       console.error("SMS SEND FAILED:", { status: resp.status, body: data, payload });
     } else {
       console.log("SMS SENT:", {
-        mobiles, template_id, sender: process.env.MSG91_SENDER_ID,
+        mobiles, flow_id: template_id, sender: process.env.MSG91_SENDER_ID,
         response: data,
       });
     }
