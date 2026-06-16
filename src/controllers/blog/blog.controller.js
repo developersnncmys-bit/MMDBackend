@@ -25,7 +25,14 @@ exports.listBlogs = async (req, res) => {
   try {
     const query = {};
     if (req.query.status) query.status = req.query.status;
-    const blogs = await Blog.find(query).sort({ createdAt: -1 });
+    // The website list (?status=published) only renders card fields — title,
+    // excerpt, category, slug, date. Sending the full HTML `content` of every
+    // post made the response huge and the blog page slow. Drop it for the public
+    // list; the blog detail page fetches the body per-slug. (.lean() too, for a
+    // plain-object response that's cheaper to serialize.)
+    let q = Blog.find(query).sort({ createdAt: -1 });
+    if (req.query.status === "published") q = q.select("-content");
+    const blogs = await q.lean();
     return res.json({ success: true, count: blogs.length, data: blogs });
   } catch (err) {
     console.error("listBlogs error:", err);
