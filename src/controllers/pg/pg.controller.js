@@ -154,6 +154,13 @@ exports.callback = async (req, res) => {
       leadService: lead?.service,
     });
 
+    // Keep the admin panel's in-memory list cache in sync — otherwise the lead
+    // is marked paid in the DB but the panel keeps showing it unpaid until the
+    // cache rebuilds.
+    if (lead) {
+      try { require("../lead/lead.controller").upsertLeadCache(lead); } catch (_) {}
+    }
+
     // Fire-and-forget email + SMS on success.
     if (paid && lead) {
       console.log("PG sending email + sms for paid lead", lead.orderId);
@@ -297,6 +304,7 @@ exports.refund = async (req, res) => {
         author: "System",
       });
       await lead.save();
+      try { require("../lead/lead.controller").upsertLeadCache(lead); } catch (_) {}
       return res.json({ success: true, message: "Refund processed", lead });
     }
     if (status === "PENDING") {
@@ -310,6 +318,7 @@ exports.refund = async (req, res) => {
         author: "System",
       });
       await lead.save();
+      try { require("../lead/lead.controller").upsertLeadCache(lead); } catch (_) {}
       return res.json({ success: true, message: "Refund queued (pending)", lead });
     }
 

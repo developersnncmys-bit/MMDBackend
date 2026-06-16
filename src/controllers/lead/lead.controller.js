@@ -78,11 +78,10 @@ exports.createLead = async (req, res) => {
         .json({ success: false, message: "Service is required" });
     }
 
-    const slNo = (await Lead.countDocuments()) + 1;
+    const orderId = b.orderId || generateOrderId();
 
-    const lead = await Lead.create({
-      slNo,
-      orderId: b.orderId || generateOrderId(),
+    const fields = {
+      orderId,
       date: b.date || istDate(),
       time: b.time || istTime(),
       name,
@@ -109,9 +108,26 @@ exports.createLead = async (req, res) => {
       nearbyPoliceStation: b.nearbyPoliceStation || b.policeStation,
       formData:
         b.formData && typeof b.formData === "object" ? b.formData : {},
-    });
+    };
 
-    // Add the new lead to the cache so it appears on the next fetch.
+    // Idempotent on orderId: the website creates the lead (unpaid) right after
+    // OTP verification, then the Paytm callback flips it to paid. If the submit
+    // fires twice (double-tap "verify OTP", a retry, an effect re-run) we must
+    // NOT insert a second lead for the same order — otherwise the callback marks
+    // only one paid and the customer ends up with a paid + an unpaid duplicate.
+    // Reuse the existing lead instead, but never downgrade an already-paid lead.
+    let lead = b.orderId ? await Lead.findOne({ orderId: b.orderId }) : null;
+    if (lead) {
+      const wasPaid = lead.paymentStatus === "paid" || lead.refundStatus;
+      Object.assign(lead, fields);
+      if (wasPaid) lead.paymentStatus = "paid";
+      await lead.save();
+    } else {
+      fields.slNo = (await Lead.countDocuments()) + 1;
+      lead = await Lead.create(fields);
+    }
+
+    // Add/refresh the lead in the cache so it appears on the next fetch.
     upsertLeadCache(lead);
 
     return res
@@ -133,7 +149,7 @@ exports.createLead = async (req, res) => {
 // separately via getLeadById.
 const LEAD_LIST_FIELDS =
   "slNo name mobileNumber email service status assignedTo amount paymentStatus " +
-  "district state date time createdAt followUpDate orderId leadType source";
+  "refundStatus refundAmount district state date time createdAt followUpDate orderId leadType source";
 
 // Run the lean list query and normalize each row (id + derived status bucket).
 const buildLeadList = async (query = {}) => {
@@ -169,6 +185,10 @@ const upsertLeadCache = (doc) => {
   if (idx !== -1) leadListCache.data[idx] = row;
   else leadListCache.data.unshift(row);
 };
+// Exported so other controllers (e.g. the Paytm callback/refund) can keep the
+// cached list in sync — otherwise a payment marks the lead paid in the DB but
+// the panel keeps showing it unpaid until the cache rebuilds.
+exports.upsertLeadCache = upsertLeadCache;
 
 // In-memory cache of the FULL (unfiltered) lead list, refreshed in the
 // background. The admin panel loads the whole list on startup; querying ~18k
@@ -200,7 +220,15 @@ exports.listLeads = async (req, res) => {
     // (building it once if the cache is still cold).
     if (!status && !search && !assignedTo) {
       if (!leadListCache.data) await refreshLeadCache();
-      const data = leadListCache.data || [];
+      // Re-derive the follow-up bucket (overdue/today/followup) on every serve
+      // using TODAY's IST date. The cached row's stored bucket is frozen at the
+      // time it was written, so without this a lead scheduled for "tomorrow"
+      // would stay in Follow-up forever instead of rolling into Today/Overdue
+      // when its date arrives (there's no background cache rebuild anymore).
+      const data = (leadListCache.data || []).map((r) => {
+        const eff = effectiveStatus(r.status, r.followUpDate);
+        return eff === r.status ? r : { ...r, status: eff };
+      });
       return res.json({ success: true, count: data.length, data });
     }
 
