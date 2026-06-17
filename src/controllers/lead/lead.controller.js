@@ -53,6 +53,19 @@ const serializeLead = (doc) => {
   return o;
 };
 
+// Auto-assign a NEW lead to a staff member based on its service, when no
+// assignee was given. PAN Card → Ganesh; Passport & Senior Citizen Card →
+// Suneetha. Returns "" for any other service (stays unassigned). This only ever
+// runs for brand-new leads in createLead, so existing leads' assignments are
+// never changed.
+const autoAssignee = (service = "") => {
+  const s = String(service).toLowerCase();
+  if (s.includes("pan")) return "Ganesh";
+  if (s.includes("passport")) return "Suneetha";
+  if (s.includes("senior")) return "Suneetha";
+  return "";
+};
+
 // website submits leads, admin can also add them manually
 exports.createLead = async (req, res) => {
   try {
@@ -80,6 +93,11 @@ exports.createLead = async (req, res) => {
 
     const orderId = b.orderId || generateOrderId();
 
+    // Honour an explicit assignee; otherwise auto-assign by service.
+    const givenAssignee =
+      b.assignedTo && b.assignedTo !== "Unassigned" ? b.assignedTo : "";
+    const assignedTo = givenAssignee || autoAssignee(service);
+
     const fields = {
       orderId,
       date: b.date || istDate(),
@@ -95,7 +113,7 @@ exports.createLead = async (req, res) => {
       amount: Number(b.amount) || 0,
       paymentStatus: b.paymentStatus || "unpaid",
       status: b.status || "new",
-      assignedTo: b.assignedTo || "",
+      assignedTo,
       source: b.source || "Website",
       leadType: b.leadType || "website",
       followUpDate: b.followUpDate,
@@ -119,8 +137,13 @@ exports.createLead = async (req, res) => {
     let lead = b.orderId ? await Lead.findOne({ orderId: b.orderId }) : null;
     if (lead) {
       const wasPaid = lead.paymentStatus === "paid" || lead.refundStatus;
+      const prevAssigned = lead.assignedTo;
       Object.assign(lead, fields);
       if (wasPaid) lead.paymentStatus = "paid";
+      // A re-submit must not wipe/override an assignment the lead already has
+      // (auto-assigned on first create, or set by an admin). Keep it unless the
+      // caller explicitly passed a new assignee.
+      if (!givenAssignee && prevAssigned) lead.assignedTo = prevAssigned;
       await lead.save();
     } else {
       fields.slNo = (await Lead.countDocuments()) + 1;
