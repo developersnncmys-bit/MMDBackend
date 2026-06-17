@@ -32,7 +32,14 @@ exports.listBlogs = async (req, res) => {
     // plain-object response that's cheaper to serialize.)
     let q = Blog.find(query).sort({ createdAt: -1 });
     if (req.query.status === "published") q = q.select("-content");
-    const blogs = await q.lean();
+    // .lean() skips Mongoose's toJSON transform, which is what normally maps
+    // _id -> id. The admin panel keys edit/delete on `id`, so add it back here
+    // (otherwise editing a blog PATCHes /blogs/undefined and silently fails).
+    const blogs = (await q.lean()).map((b) => {
+      b.id = String(b._id);
+      delete b._id;
+      return b;
+    });
     return res.json({ success: true, count: blogs.length, data: blogs });
   } catch (err) {
     console.error("listBlogs error:", err);
