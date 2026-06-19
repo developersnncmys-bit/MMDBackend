@@ -99,7 +99,13 @@ exports.updateBlog = async (req, res) => {
     if (!blog)
       return res.status(404).json({ success: false, message: "Blog not found" });
 
-    if (b.title !== undefined) blog.title = String(b.title).trim();
+    // Track a title change so the URL slug can follow it.
+    let titleChanged = false;
+    if (b.title !== undefined) {
+      const newTitle = String(b.title).trim();
+      titleChanged = newTitle !== blog.title;
+      blog.title = newTitle;
+    }
     if (b.category !== undefined) blog.category = b.category;
     if (b.excerpt !== undefined) blog.excerpt = b.excerpt;
     if (b.image !== undefined) blog.image = b.image;
@@ -109,8 +115,12 @@ exports.updateBlog = async (req, res) => {
     if (b.readTime !== undefined) blog.readTime = b.readTime;
     if (b.status !== undefined)
       blog.status = b.status === "published" ? "published" : "draft";
+    // An explicit slug wins. Otherwise, when the title changes, regenerate the
+    // URL slug from the new title so the blog's URL stays in sync with it.
     if (b.slug !== undefined && b.slug)
       blog.slug = await uniqueSlug(slugify(b.slug), blog._id);
+    else if (titleChanged)
+      blog.slug = await uniqueSlug(slugify(blog.title), blog._id);
 
     await blog.save();
     return res.json({ success: true, message: "Blog updated", data: blog });
