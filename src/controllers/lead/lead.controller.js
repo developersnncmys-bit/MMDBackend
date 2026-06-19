@@ -53,17 +53,48 @@ const serializeLead = (doc) => {
   return o;
 };
 
-// Auto-assign a NEW lead to a staff member based on its service, when no
-// assignee was given. PAN Card → Ganesh; Passport & Senior Citizen Card →
-// Suneetha. Returns "" for any other service (stays unassigned). This only ever
-// runs for brand-new leads in createLead, so existing leads' assignments are
-// never changed.
+const User = require("../../models/user/User");
+
+// Fallback auto-assign by service only (used when no team member is configured
+// for the lead's service/state in Team Settings). Kept so behaviour is sensible
+// before any service/state config is set up.
 const autoAssignee = (service = "") => {
   const s = String(service).toLowerCase();
   if (s.includes("pan")) return "Ganesh";
   if (s.includes("passport")) return "Suneetha";
   if (s.includes("senior")) return "Suneetha";
   return "";
+};
+
+const norm = (s) => String(s || "").trim().toLowerCase();
+const listHas = (list, value) => {
+  const v = norm(value);
+  if (!v) return false;
+  return (list || []).some((x) => {
+    const n = norm(x);
+    return n && (n === v || v.includes(n) || n.includes(v));
+  });
+};
+
+// Config-based auto-assign: find the active team member whose Team-Settings
+// services cover this lead's service AND whose states cover its state. A member
+// with NO states set handles that service for ALL states. Prefer an exact
+// service+state match over a service-only (all-states) match. Returns "" if no
+// member is configured for it (caller then falls back to autoAssignee).
+const findAssigneeByConfig = async (service, state) => {
+  if (!norm(service)) return "";
+  const users = await User.find({ status: "active" })
+    .select("name services states")
+    .lean();
+  let serviceOnly = "";
+  for (const u of users) {
+    if (!u.services || !u.services.length) continue;
+    if (!listHas(u.services, service)) continue;
+    const hasStates = u.states && u.states.length;
+    if (hasStates && listHas(u.states, state)) return u.name; // best match
+    if (!hasStates && !serviceOnly) serviceOnly = u.name;       // all-states
+  }
+  return serviceOnly;
 };
 
 // website submits leads, admin can also add them manually
@@ -93,10 +124,16 @@ exports.createLead = async (req, res) => {
 
     const orderId = b.orderId || generateOrderId();
 
-    // Honour an explicit assignee; otherwise auto-assign by service.
+    // Honour an explicit assignee; otherwise auto-assign by the per-user
+    // service+state config (Team Settings), falling back to the simple
+    // service-only rule when nobody is configured for it.
     const givenAssignee =
       b.assignedTo && b.assignedTo !== "Unassigned" ? b.assignedTo : "";
-    const assignedTo = givenAssignee || autoAssignee(service);
+    let assignedTo = givenAssignee;
+    if (!assignedTo) {
+      assignedTo = await findAssigneeByConfig(service, b.state || b.addrState || "");
+    }
+    if (!assignedTo) assignedTo = autoAssignee(service);
 
     const fields = {
       orderId,

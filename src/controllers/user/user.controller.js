@@ -2,6 +2,13 @@ const User = require("../../models/user/User");
 
 const isDuplicate = (err) => err && err.code === 11000;
 
+// Normalize an incoming services/states value into a clean string array
+// (accepts an array or a comma-separated string; trims + drops blanks/dupes).
+const cleanList = (v) => {
+  const arr = Array.isArray(v) ? v : String(v || "").split(",");
+  return [...new Set(arr.map((x) => String(x).trim()).filter(Boolean))];
+};
+
 // list all team members (admin Settings page)
 exports.listUsers = async (req, res) => {
   try {
@@ -39,6 +46,8 @@ exports.createUser = async (req, res) => {
       password,
       role: b.role === "admin" ? "admin" : "employee",
       status: b.status === "inactive" ? "inactive" : "active",
+      services: cleanList(b.services),
+      states: cleanList(b.states),
     });
 
     return res
@@ -79,6 +88,8 @@ exports.updateUser = async (req, res) => {
     if (b.role !== undefined) user.role = b.role === "admin" ? "admin" : "employee";
     if (b.status !== undefined)
       user.status = b.status === "inactive" ? "inactive" : "active";
+    if (b.services !== undefined) user.services = cleanList(b.services);
+    if (b.states !== undefined) user.states = cleanList(b.states);
     if (b.password) {
       if (String(b.password).length < 6)
         return res

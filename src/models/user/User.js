@@ -17,6 +17,11 @@ const userSchema = new mongoose.Schema(
     passwordPlain: { type: String, default: "" },
     role: { type: String, enum: ["admin", "employee"], default: "employee" },
     status: { type: String, enum: ["active", "inactive"], default: "active" },
+    // Services + states this user handles. A new lead is auto-assigned to the
+    // user whose services AND states cover the lead's service + state. Empty
+    // states = handles that service for ALL states.
+    services: { type: [String], default: [] },
+    states: { type: [String], default: [] },
   },
   {
     timestamps: true,
