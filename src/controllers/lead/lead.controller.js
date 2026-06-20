@@ -55,17 +55,6 @@ const serializeLead = (doc) => {
 
 const User = require("../../models/user/User");
 
-// Fallback auto-assign by service only (used when no team member is configured
-// for the lead's service/state in Team Settings). Kept so behaviour is sensible
-// before any service/state config is set up.
-const autoAssignee = (service = "") => {
-  const s = String(service).toLowerCase();
-  if (s.includes("pan")) return "Ganesh";
-  if (s.includes("passport")) return "Suneetha";
-  if (s.includes("senior")) return "Suneetha";
-  return "";
-};
-
 const norm = (s) => String(s || "").trim().toLowerCase();
 const listHas = (list, value) => {
   const v = norm(value);
@@ -80,7 +69,7 @@ const listHas = (list, value) => {
 // services cover this lead's service AND whose states cover its state. A member
 // with NO states set handles that service for ALL states. Prefer an exact
 // service+state match over a service-only (all-states) match. Returns "" if no
-// member is configured for it (caller then falls back to autoAssignee).
+// member is configured for it (the lead is then left Unassigned).
 const findAssigneeByConfig = async (service, state) => {
   if (!norm(service)) return "";
   const users = await User.find({ status: "active" })
@@ -124,16 +113,15 @@ exports.createLead = async (req, res) => {
 
     const orderId = b.orderId || generateOrderId();
 
-    // Honour an explicit assignee; otherwise auto-assign by the per-user
-    // service+state config (Team Settings), falling back to the simple
-    // service-only rule when nobody is configured for it.
+    // Honour an explicit assignee; otherwise auto-assign ONLY by the per-user
+    // service+state config set in Team Settings. If nobody is configured for
+    // this lead's service/state, it stays Unassigned (no hardcoded fallback).
     const givenAssignee =
       b.assignedTo && b.assignedTo !== "Unassigned" ? b.assignedTo : "";
     let assignedTo = givenAssignee;
     if (!assignedTo) {
       assignedTo = await findAssigneeByConfig(service, b.state || b.addrState || "");
     }
-    if (!assignedTo) assignedTo = autoAssignee(service);
 
     const fields = {
       orderId,
