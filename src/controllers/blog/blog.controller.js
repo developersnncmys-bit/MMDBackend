@@ -1,12 +1,13 @@
 const Blog = require("../../models/blog/Blog");
 
+// No length cap — the full title becomes the slug so the whole title shows in
+// the URL (the admin asked not to truncate the blog URL).
 const slugify = (str) =>
   String(str)
     .toLowerCase()
     .trim()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80) || "post";
+    .replace(/^-+|-+$/g, "") || "post";
 
 // returns a slug unique across the collection, ignoring `ignoreId` (for updates)
 const uniqueSlug = async (base, ignoreId) => {
