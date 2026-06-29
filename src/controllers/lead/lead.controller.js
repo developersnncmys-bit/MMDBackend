@@ -136,7 +136,11 @@ exports.createLead = async (req, res) => {
       pinCode: b.pinCode || "",
       service,
       amount: Number(b.amount) || 0,
-      paymentStatus: b.paymentStatus || "unpaid",
+      // NEVER trust the client for payment status. A lead is always created
+      // unpaid; only the checksum-verified Paytm callback (which records the
+      // transaction id + paidAt) may flip it to "paid". This stops leads from
+      // showing "paid" without a real transaction.
+      paymentStatus: "unpaid",
       status: b.status || "new",
       assignedTo,
       source: b.source || "Website",
