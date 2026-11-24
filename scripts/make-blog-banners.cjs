@@ -77,8 +77,6 @@ const banner = (title, category) => {
   <circle cx="1060" cy="140" r="240" fill="#ffffff" opacity="0.05"/>
   <circle cx="140" cy="560" r="200" fill="#ffffff" opacity="0.05"/>
   <circle cx="1120" cy="470" r="120" fill="#ffffff" opacity="0.05"/>
-  <!-- White logo, top-right (opposite the card's category tag on the left) -->
-  <image href="${LOGO}" xlink:href="${LOGO}" x="936" y="60" width="212" height="76" preserveAspectRatio="xMidYMid meet"/>
   <text y="${startY}" font-family="Arial, Helvetica, sans-serif" font-size="60" font-weight="800" fill="#ffffff">${titleTspans}</text>
   <rect x="0" y="556" width="1200" height="74" fill="#000000" opacity="0.22"/>
   <text x="80" y="601" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="500" fill="#ffffff" opacity="0.85">Click it, Get it.</text>
