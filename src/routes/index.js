@@ -7,6 +7,7 @@ const blogRoutes = require("./blog/blog.routes");
 const careerRoutes = require("./career/career.routes");
 const otpRoutes = require("./otp/otp.routes");
 const pgRoutes = require("./pg/pg.routes");
+const caseRoutes = require("./case/case.routes");
 
 router.use("/leads", leadRoutes);
 router.use("/users", userRoutes);
@@ -14,6 +15,7 @@ router.use("/blogs", blogRoutes);
 router.use("/careers", careerRoutes);
 router.use("/otp", otpRoutes);
 router.use("/PG", pgRoutes);
+router.use("/cases", caseRoutes);
 
 router.get("/health", (req, res) => {
   res.json({ success: true, message: "ok" });

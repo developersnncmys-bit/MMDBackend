@@ -1,5 +1,9 @@
 const User = require("../../models/user/User");
 
+// Roles a team member can have. "operations" = backend team working on
+// converted leads (Operations module in the admin panel).
+const ROLES = ["admin", "employee", "operations"];
+
 const isDuplicate = (err) => err && err.code === 11000;
 
 // Normalize an incoming services/states value into a clean string array
@@ -44,7 +48,7 @@ exports.createUser = async (req, res) => {
       phone: String(b.phone || "").trim(),
       username,
       password,
-      role: b.role === "admin" ? "admin" : "employee",
+      role: ROLES.includes(b.role) ? b.role : "employee",
       status: b.status === "inactive" ? "inactive" : "active",
       services: cleanList(b.services),
       states: cleanList(b.states),
@@ -85,7 +89,7 @@ exports.updateUser = async (req, res) => {
     if (b.name !== undefined) user.name = String(b.name).trim();
     if (b.email !== undefined) user.email = String(b.email).trim();
     if (b.phone !== undefined) user.phone = String(b.phone).trim();
-    if (b.role !== undefined) user.role = b.role === "admin" ? "admin" : "employee";
+    if (b.role !== undefined) user.role = ROLES.includes(b.role) ? b.role : "employee";
     if (b.status !== undefined)
       user.status = b.status === "inactive" ? "inactive" : "active";
     if (b.services !== undefined) user.services = cleanList(b.services);

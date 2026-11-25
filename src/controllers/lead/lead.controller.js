@@ -1,4 +1,13 @@
 const Lead = require("../../models/lead/Lead");
+const { ensureCaseForLead } = require("../case/case.controller");
+
+// A converted lead is handed to the operations (backend) team as a case.
+// Never let a problem here fail the lead save itself.
+const handOverIfConverted = (lead) => {
+  if (lead && lead.status === "converted") {
+    ensureCaseForLead(lead).catch((err) => console.error("ensureCaseForLead error:", err));
+  }
+};
 
 const generateOrderId = () =>
   "MMD" + Date.now() + Math.floor(Math.random() * 9000 + 1000);
@@ -181,6 +190,7 @@ exports.createLead = async (req, res) => {
 
     // Add/refresh the lead in the cache so it appears on the next fetch.
     upsertLeadCache(lead);
+    handOverIfConverted(lead);
 
     return res
       .status(201)
@@ -569,6 +579,7 @@ exports.updateLead = async (req, res) => {
     // Patch the cache so the new status/assignee/etc. shows on the next fetch
     // (and survives a page refresh) instead of waiting for the 25s rebuild.
     upsertLeadCache(lead);
+    if (updates.status === "converted") handOverIfConverted(lead);
     return res.json({ success: true, message: "Lead updated", data: serializeLead(lead) });
   } catch (err) {
     console.error("updateLead error:", err);

@@ -15,7 +15,7 @@ const userSchema = new mongoose.Schema(
     // SECURITY NOTE: anyone with admin/DB access can read these, and a DB leak
     // exposes every password. This is an explicit, accepted trade-off.
     passwordPlain: { type: String, default: "" },
-    role: { type: String, enum: ["admin", "employee"], default: "employee" },
+    role: { type: String, enum: ["admin", "employee", "operations"], default: "employee" },
     status: { type: String, enum: ["active", "inactive"], default: "active" },
     // Services + states this user handles. A new lead is auto-assigned to the
     // user whose services AND states cover the lead's service + state. Empty
