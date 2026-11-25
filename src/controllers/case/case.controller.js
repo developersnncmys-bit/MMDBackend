@@ -49,6 +49,18 @@ async function nextCaseNo() {
 // Converted lead -> operations case (called from the lead controller)
 // ---------------------------------------------------------------------------
 
+// Business rules for cases that come from a converted lead:
+//  - "Handled by" is the person the lead was assigned to when it converted,
+//    and cannot be edited.
+//  - PAN Card needs no further operations work: converted = completed, and
+//    the status cannot be changed.
+const AUTO_COMPLETE_SERVICES = ["PAN Card"];
+const leadOwner = (lead) => {
+  const a = String(lead?.assignedTo || "").trim();
+  return a && a.toLowerCase() !== "unassigned" ? a : "";
+};
+const isAutoComplete = (service) => AUTO_COMPLETE_SERVICES.includes(service);
+
 // Creates the case for a converted lead, pre-filled from the lead. Does
 // nothing if the lead already has one, so converting twice is harmless.
 async function ensureCaseForLead(lead) {
@@ -59,14 +71,18 @@ async function ensureCaseForLead(lead) {
 
   const fd = lead.formData || {};
   const service = canonicalService(lead.service);
+  const date = lead.status === "converted" && lead.updatedAt ? new Date(lead.updatedAt) : new Date();
+  const autoDone = isAutoComplete(service);
   try {
     return await Case.create({
+      handledBy: leadOwner(lead),
+      ...(autoDone ? { completedAt: date } : {}),
       caseNo: await nextCaseNo(),
       leadId,
       orderId: lead.orderId || "",
       // When the lead converted (its last update) — so leads converted
       // before Operations existed land in the right month, not today.
-      date: lead.status === "converted" && lead.updatedAt ? new Date(lead.updatedAt) : new Date(),
+      date,
       service,
       serviceDetail: lead.service && lead.service !== service ? lead.service : "",
       source: lead.source || (lead.leadType === "website" ? "Website" : ""),
@@ -78,7 +94,7 @@ async function ensureCaseForLead(lead) {
       email: lead.email || "",
       amount: Number(lead.amount) || 0,
       paymentMode: lead.paymentStatus === "paid" ? "Online (Paytm)" : "",
-      status: "new",
+      status: autoDone ? "completed" : "new",
       createdBy: "Auto - lead converted",
     });
   } catch (err) {
@@ -93,8 +109,36 @@ async function ensureCaseForLead(lead) {
 // ---------------------------------------------------------------------------
 
 // GET /cases?month=YYYY-MM&service=&status=&handledBy=&search=
+// Cases created from leads before the rules above existed: fill "Handled by"
+// from the lead's owner and complete PAN Card cases. Runs once per server start.
+let leadRulesApplied = null;
+function applyLeadRulesOnce() {
+  if (!leadRulesApplied) {
+    leadRulesApplied = (async () => {
+      const Lead = require("../../models/lead/Lead");
+      const cases = await Case.find({
+        leadId: { $type: "string" },
+        $or: [{ handledBy: "" }, { handledBy: { $exists: false } }, { service: { $in: AUTO_COMPLETE_SERVICES }, status: { $ne: "completed" } }],
+      });
+      for (const c of cases) {
+        if (!c.handledBy) {
+          const lead = /^[a-f0-9]{24}$/i.test(c.leadId) ? await Lead.findById(c.leadId, "assignedTo").lean() : null;
+          c.handledBy = leadOwner(lead);
+        }
+        if (isAutoComplete(c.service) && c.status !== "completed") {
+          c.status = "completed";
+          c.completedAt = c.completedAt || c.date;
+        }
+        await c.save();
+      }
+    })().catch((err) => { console.error("applyLeadRulesOnce error:", err); leadRulesApplied = null; });
+  }
+  return leadRulesApplied;
+}
+
 exports.listCases = async (req, res) => {
   try {
+    await applyLeadRulesOnce();
     const { month, service, status, handledBy, search, open } = req.query;
     const q = {};
     if (month && MONTH_RE.test(month)) {
@@ -149,6 +193,13 @@ exports.updateCase = async (req, res) => {
     const c = await Case.findById(req.params.id);
     if (!c) return res.status(404).json({ success: false, message: "Case not found" });
     const u = pickUpdates(req.body);
+    // Locked on cases from a converted lead: who handled it (the lead's owner)
+    // and the service; PAN Card cases also keep their automatic "completed".
+    if (c.leadId) {
+      delete u.handledBy;
+      delete u.service;
+      if (isAutoComplete(c.service)) delete u.status;
+    }
     // Stamp the completion date the first time a case is completed; clear it
     // if the case is reopened, so monthly "completed" counts stay honest.
     if (u.status === "completed" && c.status !== "completed") u.completedAt = new Date();
@@ -211,6 +262,7 @@ function groupBy(rows, key) {
 // GET /cases/stats?month=YYYY-MM  (defaults to the current month, India time)
 exports.getCaseStats = async (req, res) => {
   try {
+    await applyLeadRulesOnce();
     const month = MONTH_RE.test(String(req.query.month || "")) ? req.query.month : currentMonth();
     const fields = "date status service appType scheme handledBy amount extraAmount";
 
