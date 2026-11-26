@@ -315,14 +315,19 @@ function summarize(rows) {
   };
 }
 
-function groupBy(rows, key) {
-  const m = new Map();
+// "GANESH" / "Ganesh" / "ganesh " are one person (and "FRESH" / "Fresh" one
+// type): group ignoring case and extra spaces, label as "Ganesh".
+const titleCase = (s) =>
+  s.toLowerCase().replace(/[a-z][a-z']*/g, (w) => w[0].toUpperCase() + w.slice(1));
+function groupBy(rows, key, pretty = true) {
+  const m = new Map(); // normalised key -> { label, list }
   for (const r of rows) {
-    const k = String(r[key] || "").trim() || "Not set";
-    if (!m.has(k)) m.set(k, []);
-    m.get(k).push(r);
+    const raw = String(r[key] || "").replace(/\s+/g, " ").trim();
+    const k = raw.toLowerCase() || "not set";
+    if (!m.has(k)) m.set(k, { label: raw ? (pretty ? titleCase(raw) : raw) : "Not set", list: [] });
+    m.get(k).list.push(r);
   }
-  return m;
+  return new Map([...m.values()].map((g) => [g.label, g.list]));
 }
 
 // GET /cases/stats?month=YYYY-MM  (defaults to the current month, India time)
@@ -336,7 +341,7 @@ exports.getCaseStats = async (req, res) => {
     const { start, end } = monthRange(month);
     const rows = await Case.find({ date: { $gte: start, $lt: end } }, fields).lean();
 
-    const byService = [...groupBy(rows, "service")].map(([service, list]) => ({
+    const byService = [...groupBy(rows, "service", false)].map(([service, list]) => ({
       service,
       ...summarize(list),
       byType: [...groupBy(list, "appType")].map(([type, l]) => ({ type, ...summarize(l) }))
