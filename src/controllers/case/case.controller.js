@@ -35,6 +35,8 @@ function pickUpdates(body) {
   if (u.extraAmount !== undefined) u.extraAmount = Number(u.extraAmount) || 0;
   if (u.date !== undefined) u.date = u.date ? new Date(u.date) : new Date();
   if (u.service !== undefined) u.service = canonicalService(u.service);
+  // "Appointment" and "Applied" were folded into "In process".
+  if (u.status === "appointment" || u.status === "applied") u.status = "processing";
   if (u.status !== undefined && !CASE_STATUSES.includes(u.status)) delete u.status;
   if (u.portalPassword !== undefined) u.hasPortalPassword = !!String(u.portalPassword);
   return u;
@@ -116,6 +118,8 @@ function applyLeadRulesOnce() {
   if (!leadRulesApplied) {
     leadRulesApplied = (async () => {
       const Lead = require("../../models/lead/Lead");
+      // Statuses removed from the pipeline -> "In process".
+      await Case.updateMany({ status: { $in: ["appointment", "applied"] } }, { $set: { status: "processing" } });
       const cases = await Case.find({
         leadId: { $type: "string" },
         $or: [{ handledBy: "" }, { handledBy: { $exists: false } }, { service: { $in: AUTO_COMPLETE_SERVICES }, status: { $ne: "completed" } }],
@@ -392,8 +396,9 @@ exports.importCases = async (req, res) => {
     if (!rows.length) return res.status(400).json({ success: false, message: "No rows to import" });
     const by = String(req.body.createdBy || "Import");
 
+    const Lead = require("../../models/lead/Lead");
     let caseNo = await nextCaseNo();
-    let created = 0, duplicates = 0;
+    let created = 0, duplicates = 0, linked = 0, merged = 0;
     const errors = [];
     for (let i = 0; i < rows.length; i++) {
       const u = pickUpdates(rows[i] || {});
@@ -401,6 +406,51 @@ exports.importCases = async (req, res) => {
       if (!u.service) u.service = "Other";
       if (!u.date || isNaN(u.date.getTime())) u.date = new Date();
       if (u.status === "completed") u.completedAt = u.date;
+
+      // Same customer as a converted lead (same mobile + service)? Then this row
+      // IS that lead's case: link it (so it leaves "Hand over lead"), or — if
+      // the lead already has a case — fill that case's blanks instead of
+      // creating a second one.
+      const mobile = String(u.phone || "").replace(/\D/g, "").slice(-10);
+      if (mobile.length === 10) {
+        const leads = await Lead.find({ status: "converted", mobileNumber: new RegExp(`${mobile}$`) }).lean();
+        const lead = leads.find((l) => canonicalService(l.service) === u.service);
+        if (lead) {
+          const leadId = String(lead._id);
+          const existing = await Case.findOne({ leadId }).select("+portalPassword");
+          if (existing) {
+            let changed = false;
+            for (const [k, v] of Object.entries(u)) {
+              if (["handledBy", "service", "status", "completedAt", "date"].includes(k)) continue;
+              const cur = existing[k];
+              if ((cur === "" || cur === undefined || cur === null || cur === 0) && v !== "" && v !== 0 && v !== undefined) {
+                existing[k] = v; changed = true;
+              }
+            }
+            if (existing.portalPassword) existing.hasPortalPassword = true;
+            if (changed) await existing.save();
+            merged++;
+            continue;
+          }
+          try {
+            const autoDone = isAutoComplete(u.service);
+            await Case.create({
+              ...u,
+              caseNo: caseNo++,
+              leadId,
+              orderId: lead.orderId || "",
+              handledBy: leadOwner(lead) || u.handledBy || "",
+              ...(autoDone ? { status: "completed", completedAt: u.completedAt || u.date } : {}),
+              createdBy: by,
+            });
+            linked++;
+          } catch (e) {
+            if (e && e.code === 11000) merged++;
+            else errors.push({ row: i + 1, reason: e.message || "Could not save" });
+          }
+          continue;
+        }
+      }
 
       const dayStart = new Date(u.date); dayStart.setUTCHours(0, 0, 0, 0);
       const dayEnd = new Date(dayStart.getTime() + 36 * 3600 * 1000); // covers the IST day either side
@@ -417,7 +467,11 @@ exports.importCases = async (req, res) => {
         errors.push({ row: i + 1, reason: e.message || "Could not save" });
       }
     }
-    return res.json({ success: true, message: `Imported ${created} case(s)`, data: { created, duplicates, errors } });
+    return res.json({
+      success: true,
+      message: `Imported ${created + linked} case(s)`,
+      data: { created, linked, merged, duplicates, errors },
+    });
   } catch (err) {
     console.error("importCases error:", err);
     return res.status(500).json({ success: false, message: "Server error" });
