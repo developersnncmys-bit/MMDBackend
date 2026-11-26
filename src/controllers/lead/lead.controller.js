@@ -1,5 +1,5 @@
 const Lead = require("../../models/lead/Lead");
-const { ensureCaseForLead } = require("../case/case.controller");
+const { ensureCaseForLead, syncCaseFromLead } = require("../case/case.controller");
 
 // A converted lead is handed to the operations (backend) team as a case.
 // Never let a problem here fail the lead save itself.
@@ -7,6 +7,11 @@ const handOverIfConverted = (lead) => {
   if (lead && lead.status === "converted") {
     ensureCaseForLead(lead).catch((err) => console.error("ensureCaseForLead error:", err));
   }
+};
+
+// A new comment may carry the PAN ack number — copy it onto the lead's case.
+const syncCase = (lead) => {
+  syncCaseFromLead(lead).catch((err) => console.error("syncCaseFromLead error:", err));
 };
 
 const generateOrderId = () =>
@@ -580,6 +585,7 @@ exports.updateLead = async (req, res) => {
     // (and survives a page refresh) instead of waiting for the 25s rebuild.
     upsertLeadCache(lead);
     if (updates.status === "converted") handOverIfConverted(lead);
+    if (updates.notes !== undefined) syncCase(lead);
     return res.json({ success: true, message: "Lead updated", data: serializeLead(lead) });
   } catch (err) {
     console.error("updateLead error:", err);
@@ -606,6 +612,7 @@ exports.addNote = async (req, res) => {
         .status(404)
         .json({ success: false, message: "Lead not found" });
     }
+    syncCase(lead);
     return res.json({ success: true, message: "Note added", data: serializeLead(lead) });
   } catch (err) {
     console.error("addNote error:", err);

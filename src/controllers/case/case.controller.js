@@ -63,6 +63,39 @@ const leadOwner = (lead) => {
 };
 const isAutoComplete = (service) => AUTO_COMPLETE_SERVICES.includes(service);
 
+// PAN acknowledgement number from the lead's comments, newest comment first:
+// "Login done successfully 881154233432351", "Ack no: 881154235535092".
+function ackFromNotes(notes) {
+  const list = [...(notes || [])].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  for (const n of list) {
+    const t = String(n.text || "");
+    const labelled = t.match(/ack\w*\.?\s*(?:no|num|number)?\.?\s*[:\-#]?\s*([A-Z0-9]{8,20})/i);
+    if (labelled && /\d{6,}/.test(labelled[1])) return labelled[1].toUpperCase();
+    const digits = t.match(/(?<!\d)(\d{14,16})(?!\d)/);
+    if (digits) return digits[1];
+  }
+  return "";
+}
+
+// Keep a PAN case's ack number in step with the lead's comments.
+async function syncCaseFromLead(lead) {
+  if (!lead || canonicalService(lead.service) !== "PAN Card") return;
+  const ack = ackFromNotes(lead.notes);
+  if (!ack) return;
+  await Case.updateOne({ leadId: String(lead._id || lead.id), applicationNo: { $ne: ack } }, { $set: { applicationNo: ack } });
+}
+
+// Same person? Import rows are matched to a converted lead by mobile + service,
+// but families share one mobile — so the names must share a real word too
+// ("MS MANJULA" ~ "Manjula .m", but not "MR KOUSHIK S").
+const nameWords = (s) => String(s || "").toUpperCase().replace(/[^A-Z ]/g, " ")
+  .replace(/\b(MR|MRS|MS|MISS|MASTER|DR|SMT|SRI|SHRI|KUM|KUMARI)\b/g, " ")
+  .split(/\s+/).filter((w) => w.length >= 3);
+function sameName(a, b) {
+  const A = nameWords(a), B = nameWords(b);
+  return A.some((w) => B.some((v) => v === w || (Math.min(v.length, w.length) >= 4 && (v.startsWith(w) || w.startsWith(v)))));
+}
+
 // Creates the case for a converted lead, pre-filled from the lead. Does
 // nothing if the lead already has one, so converting twice is harmless.
 async function ensureCaseForLead(lead) {
@@ -78,6 +111,7 @@ async function ensureCaseForLead(lead) {
   try {
     return await Case.create({
       handledBy: leadOwner(lead),
+      ...(service === "PAN Card" ? { applicationNo: ackFromNotes(lead.notes) } : {}),
       ...(autoDone ? { completedAt: date } : {}),
       caseNo: await nextCaseNo(),
       leadId,
@@ -122,13 +156,17 @@ function applyLeadRulesOnce() {
       await Case.updateMany({ status: { $in: ["appointment", "applied"] } }, { $set: { status: "processing" } });
       const cases = await Case.find({
         leadId: { $type: "string" },
-        $or: [{ handledBy: "" }, { handledBy: { $exists: false } }, { service: { $in: AUTO_COMPLETE_SERVICES }, status: { $ne: "completed" } }],
+        $or: [
+          { handledBy: "" }, { handledBy: { $exists: false } },
+          { service: { $in: AUTO_COMPLETE_SERVICES }, status: { $ne: "completed" } },
+          { service: "PAN Card", applicationNo: "" },
+        ],
       });
       for (const c of cases) {
-        if (!c.handledBy) {
-          const lead = /^[a-f0-9]{24}$/i.test(c.leadId) ? await Lead.findById(c.leadId, "assignedTo").lean() : null;
-          c.handledBy = leadOwner(lead);
-        }
+        const lead = /^[a-f0-9]{24}$/i.test(c.leadId) ? await Lead.findById(c.leadId, "assignedTo notes").lean() : null;
+        if (!c.handledBy) c.handledBy = leadOwner(lead);
+        // PAN ack number from the lead's comments.
+        if (c.service === "PAN Card" && !c.applicationNo && lead) c.applicationNo = ackFromNotes(lead.notes);
         if (isAutoComplete(c.service) && c.status !== "completed") {
           c.status = "completed";
           c.completedAt = c.completedAt || c.date;
@@ -235,11 +273,18 @@ const money = (c) => (Number(c.amount) || 0) + (Number(c.extraAmount) || 0);
 
 function summarize(rows) {
   const byStatus = Object.fromEntries(CASE_STATUSES.map((s) => [s, 0]));
-  let amount = 0, completedAmount = 0;
+  // amount = MMD service fee, extraAmount = government fee.
+  let amount = 0, completedAmount = 0, serviceFee = 0, govtFee = 0, completedServiceFee = 0, completedGovtFee = 0;
   for (const r of rows) {
     byStatus[r.status] = (byStatus[r.status] || 0) + 1;
     amount += money(r);
-    if (r.status === "completed") completedAmount += money(r);
+    serviceFee += Number(r.amount) || 0;
+    govtFee += Number(r.extraAmount) || 0;
+    if (r.status === "completed") {
+      completedAmount += money(r);
+      completedServiceFee += Number(r.amount) || 0;
+      completedGovtFee += Number(r.extraAmount) || 0;
+    }
   }
   const total = rows.length;
   const completed = byStatus.completed || 0;
@@ -250,6 +295,7 @@ function summarize(rows) {
     open: total - completed - cancelled,
     completionPct: live > 0 ? Math.round((completed / live) * 100) : 0,
     amount, completedAmount, byStatus,
+    serviceFee, govtFee, completedServiceFee, completedGovtFee,
   };
 }
 
@@ -414,7 +460,7 @@ exports.importCases = async (req, res) => {
       const mobile = String(u.phone || "").replace(/\D/g, "").slice(-10);
       if (mobile.length === 10) {
         const leads = await Lead.find({ status: "converted", mobileNumber: new RegExp(`${mobile}$`) }).lean();
-        const lead = leads.find((l) => canonicalService(l.service) === u.service);
+        const lead = leads.find((l) => canonicalService(l.service) === u.service && sameName(l.name, u.name));
         if (lead) {
           const leadId = String(lead._id);
           const existing = await Case.findOne({ leadId }).select("+portalPassword");
@@ -479,3 +525,4 @@ exports.importCases = async (req, res) => {
 };
 
 exports.ensureCaseForLead = ensureCaseForLead;
+exports.syncCaseFromLead = syncCaseFromLead;
