@@ -63,6 +63,19 @@ const leadOwner = (lead) => {
 };
 const isAutoComplete = (service) => AUTO_COMPLETE_SERVICES.includes(service);
 
+// PAN Card fees: of what the customer pays (e.g. ₹350), ₹107 is the
+// government fee and the rest is MMD's service fee. Applied automatically
+// when a PAN case comes in, unless a government fee was already entered.
+const PAN_GOVT_FEE = 107;
+function splitPanFees(c) {
+  if (c.service !== "PAN Card") return c;
+  const total = (Number(c.amount) || 0) + (Number(c.extraAmount) || 0);
+  if (Number(c.extraAmount) > 0 || total <= PAN_GOVT_FEE) return c;
+  c.extraAmount = PAN_GOVT_FEE;
+  c.amount = total - PAN_GOVT_FEE;
+  return c;
+}
+
 // PAN acknowledgement number from the lead's comments, newest comment first:
 // "Login done successfully 881154233432351", "Ack no: 881154235535092".
 function ackFromNotes(notes) {
@@ -128,7 +141,8 @@ async function ensureCaseForLead(lead) {
       name: lead.name,
       phone: lead.mobileNumber || "",
       email: lead.email || "",
-      amount: Number(lead.amount) || 0,
+      // amount = MMD service fee, extraAmount = government fee (PAN: split automatically)
+      ...splitPanFees({ service, amount: Number(lead.amount) || 0, extraAmount: 0 }),
       paymentMode: lead.paymentStatus === "paid" ? "Online (Paytm)" : "",
       status: autoDone ? "completed" : "new",
       createdBy: "Auto - lead converted",
@@ -160,6 +174,7 @@ function applyLeadRulesOnce() {
           { handledBy: "" }, { handledBy: { $exists: false } },
           { service: { $in: AUTO_COMPLETE_SERVICES }, status: { $ne: "completed" } },
           { service: "PAN Card", applicationNo: "" },
+          { service: "PAN Card", extraAmount: 0, amount: { $gt: PAN_GOVT_FEE } },
         ],
       });
       for (const c of cases) {
@@ -167,6 +182,7 @@ function applyLeadRulesOnce() {
         if (!c.handledBy) c.handledBy = leadOwner(lead);
         // PAN ack number from the lead's comments.
         if (c.service === "PAN Card" && !c.applicationNo && lead) c.applicationNo = ackFromNotes(lead.notes);
+        splitPanFees(c); // existing PAN cases: ₹350 -> govt ₹107 + MMD ₹243
         if (isAutoComplete(c.service) && c.status !== "completed") {
           c.status = "completed";
           c.completedAt = c.completedAt || c.date;
@@ -452,6 +468,7 @@ exports.importCases = async (req, res) => {
       if (!u.service) u.service = "Other";
       if (!u.date || isNaN(u.date.getTime())) u.date = new Date();
       if (u.status === "completed") u.completedAt = u.date;
+      splitPanFees(u); // PAN: ₹350 -> govt ₹107 + MMD ₹243 when no govt fee is given
 
       // Same customer as a converted lead (same mobile + service)? Then this row
       // IS that lead's case: link it (so it leaves "Hand over lead"), or — if
